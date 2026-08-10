@@ -52,7 +52,7 @@ def test_commands_pin_provider_model_and_disable_tools():
     moa = build_command("moa", config()["arms"]["moa"], "hello")
     assert base[-4:] == ["--provider", "openai-codex", "--model", "gpt-5.6-sol"]
     assert moa[-4:] == ["--provider", "moa", "--model", "default"]
-    assert "--toolsets" in base and base[base.index("--toolsets") + 1] == "none"
+    assert "--toolsets" not in base
     assert "--ignore-rules" in base
     assert "--safe-mode" not in base
 

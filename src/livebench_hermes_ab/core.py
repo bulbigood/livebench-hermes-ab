@@ -61,8 +61,6 @@ def build_command(arm_name: str, arm: dict[str, Any], prompt: str) -> list[str]:
     return [
         "hermes",
         "--ignore-rules",
-        "--toolsets",
-        "none",
         "--oneshot",
         prompt,
         "--provider",

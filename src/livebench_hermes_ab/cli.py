@@ -23,8 +23,16 @@ from .core import (
     sha256_bytes,
     validate_treatment_boundary,
 )
+from .trace_validation import validate_moa_traces
 
 ROOT = Path(__file__).resolve().parents[2]
+
+DISABLED_TOOLSETS = [
+    "web", "browser", "terminal", "file", "code_execution", "vision",
+    "video", "image_gen", "video_gen", "bfl", "x_search", "tts", "stt",
+    "skills", "todo", "memory", "context_engine", "session_search", "clarify",
+    "delegation", "cronjob", "homeassistant", "spotify", "yuanbao", "computer_use",
+]
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -39,12 +47,15 @@ def configure_homes(config: dict[str, Any], source_home: Path, output_root: Path
         home.mkdir(parents=True, exist_ok=True, mode=0o700)
         cfg: dict[str, Any] = {
             "model": {"default": arm["model"], "provider": arm["provider"]},
-            "agent": {"reasoning_effort": "low"},
+            "agent": {
+                "reasoning_effort": "low",
+                "disabled_toolsets": DISABLED_TOOLSETS,
+            },
             "moa": {
                 "enabled": bool(arm["moa_enabled"]),
                 "default_preset": "default",
                 "active_preset": "default" if arm["moa_enabled"] else "",
-                "save_traces": False,
+                "save_traces": bool(arm["moa_enabled"]),
                 "presets": {},
             },
         }
@@ -277,6 +288,7 @@ def run(config_path: Path, source_home: Path, run_dir: Path, timeout: int) -> No
             }
             with (raw_dir / f"hermes-{arm_name}.jsonl").open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    validate_moa_traces(run_dir, expected_count=len(manifest["pairs"]))
 
 
 def parser() -> argparse.ArgumentParser:

@@ -16,6 +16,7 @@ The repository is already prepared. To recreate the environment and public quest
 ```bash
 uv sync --extra test --extra livebench
 PYTHONPATH=upstream uv run --extra livebench python upstream/livebench/download_questions.py
+NLTK_DATA=$HOME/.cache/nltk_data uv run --extra livebench python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
 uv run livebench-hermes-ab prepare --run-dir runs/smoke
 ```
 
@@ -38,12 +39,15 @@ The five-question smoke performs:
 
 `every_n:3` refreshes references on the first iteration of every user turn; tools are disabled, so each one-turn question gets exactly one reference fanout.
 
+The run also requires five full MoA traces. It fails closed unless each Minimax reference is non-empty, has positive token usage, and each aggregator output hash-matches its saved answer.
+
 Use a fresh run directory for every execution. Existing answer files are rejected to prevent duplicate or mixed pairs.
 
 ## Score
 
 ```bash
 uv run livebench-hermes-ab score --run-dir runs/smoke
+uv run python scripts/build_report.py --run runs/smoke --output reports
 ```
 
 Scoring is local and deterministic. The wrapper lazy-loads the task-specific processors from the pinned LiveBench checkout and makes no judge-model calls.
@@ -59,7 +63,7 @@ runs/smoke/summary.json
 
 ## Isolation
 
-Each arm receives an isolated `HERMES_HOME` and runs with `--ignore-rules --toolsets none`.
+Each arm receives an isolated `HERMES_HOME` and runs with `--ignore-rules`. Every built-in toolset is disabled in the isolated config; offline `hermes prompt-size --json` must report zero tool schemas.
 
 - Both arms use the existing OpenAI Codex OAuth `auth.json` through a read-only symlink.
 - BASE receives an empty `.env` and cannot access OpenRouter credentials.
@@ -73,6 +77,7 @@ Each arm receives an isolated `HERMES_HOME` and runs with `--ignore-rules --tool
 - BASE and MoA aggregator must match provider/model/reasoning.
 - Minimax M3 is the only reference model.
 - `degraded_reference_policy: loud` rejects failed references.
+- Full MoA traces prove exact reference cardinality, model identity, positive usage, and aggregator-output matching.
 - Stable pair IDs and alternating arm order.
 - Byte-identical prompt construction across arms.
 - Incomplete or duplicate answer cells cannot be scored.

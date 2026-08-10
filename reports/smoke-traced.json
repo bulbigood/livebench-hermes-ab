@@ -1,0 +1,118 @@
+{
+  "verdict": "PROMISING_NOT_CONCLUSIVE",
+  "technical_validity": "VALID_WITH_BASE_TOKEN_TELEMETRY_LIMITATION",
+  "pairs": [
+    {
+      "question_id": "1ad1d332901ea1841a6ff90d32a3a82871011fb38e3ccc3f3c59a839a4e21253",
+      "category": "language",
+      "task": "connections",
+      "base": 1.0,
+      "moa": 1.0,
+      "delta": 0.0
+    },
+    {
+      "question_id": "0503923535fbd8badfb2ccf38989b36a8ecaa2eda332a4b515bb13932421fecd",
+      "category": "instruction_following",
+      "task": "simplify",
+      "base": 1.0,
+      "moa": 1.0,
+      "delta": 0.0
+    },
+    {
+      "question_id": "c29eb6b3c9fd3f67fba90afc62b89640ba6b6aa5f74bb2efd8d5650af6b78ff6",
+      "category": "reasoning",
+      "task": "zebra_puzzle",
+      "base": 0.0,
+      "moa": 0.125,
+      "delta": 0.125
+    },
+    {
+      "question_id": "58223a1f18c3cda82967cc3ba7d24813209e41470aee583167ee938ae01d3d21",
+      "category": "data_analysis",
+      "task": "cta",
+      "base": 0.0,
+      "moa": 0.0,
+      "delta": 0.0
+    },
+    {
+      "question_id": "11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115",
+      "category": "math",
+      "task": "olympiad",
+      "base": 0.021276595744680882,
+      "moa": 0.8723404255319149,
+      "delta": 0.851063829787234
+    }
+  ],
+  "summary": {
+    "pair_count": 5,
+    "base_mean": 0.4042553191489362,
+    "moa_mean": 0.5994680851063829,
+    "mean_delta": 0.1952127659574468,
+    "median_delta": 0.0,
+    "bootstrap_95pct_mean_delta": [
+      0.0,
+      0.5356382978723404
+    ],
+    "improved": 2,
+    "tied": 3,
+    "regressed": 0
+  },
+  "latency": {
+    "base_wall_s": 609.605,
+    "moa_wall_s": 739.192,
+    "overhead_s": 129.587,
+    "overhead_pct": 21.257535617325974
+  },
+  "trace_audit": {
+    "aggregator_model": "gpt-5.6-sol",
+    "aggregator_provider": "openai-codex",
+    "answer_trace_hashes_match": true,
+    "reference_calls": 5,
+    "reference_input_tokens": 8784,
+    "reference_model": "minimax/minimax-m3",
+    "reference_output_tokens": 33320,
+    "reference_provider": "openrouter",
+    "status": "valid",
+    "trace_records": 5
+  },
+  "usage": {
+    "base": {
+      "usage_rows": 3,
+      "api_calls_recorded": 3,
+      "input_tokens_recorded": 4412,
+      "output_tokens_recorded": 1218,
+      "cache_read_tokens_recorded": 0,
+      "reasoning_tokens_recorded": 949,
+      "zero_usage_sessions": 2,
+      "complete": false
+    },
+    "moa": {
+      "usage_rows": 5,
+      "api_calls_recorded": 5,
+      "input_tokens_recorded": 18828,
+      "output_tokens_recorded": 39976,
+      "cache_read_tokens_recorded": 640,
+      "reasoning_tokens_recorded": 30202,
+      "zero_usage_sessions": 0,
+      "complete": true
+    }
+  },
+  "cost": {
+    "usd_total": null,
+    "reason": "Reference costs are provider estimates serialized as strings; BASE OpenAI Codex is included. No verified comparable USD total."
+  },
+  "provisional_run_excluded": "runs/smoke-provisional-untraced",
+  "artifact_sha256": {
+    "manifest": "3dd47e66afd397dcd4b2c82fda4bff170c9a480708bb4978ef7b27ff81157b36",
+    "questions": "181bc05e40d440902ca4b8ec943a358a6826b06f05ab4d45d7b29e4159fb2c3d",
+    "base_answers": "7ad92d9e9a0c500d32e90cac8a25627caad00ada90e868b258dbe0edd75da6a6",
+    "moa_answers": "de3d976aa361bbbf1daf93f00ae28bfbc5e66175b764a5023b1272a5d8c19213",
+    "scores": "a7a7075333aaa2f47d59ab769e44046d163d070596034fdbc013033027e53251",
+    "trace_audit": "6c329f61a65273cff8e6407758aef724444065130239e1cbff02aafb2b023d11"
+  },
+  "limitations": [
+    "Only five heterogeneous tasks; this is a demanding smoke test, not a stable population estimate.",
+    "Two BASE sessions did not persist token usage; latency and scores are complete, BASE token totals are not.",
+    "The bootstrap interval includes zero and is descriptive for the frozen five-task sample only."
+  ]
+}

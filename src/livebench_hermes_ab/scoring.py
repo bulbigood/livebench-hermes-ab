@@ -72,8 +72,21 @@ def score_standard(question: dict[str, Any], answer: str) -> float:
 def score_instruction_following(
     question: dict[str, Any], record: dict[str, Any], arm: str, output_dir: Path
 ) -> float:
+    import nltk
     from livebench.if_runner.instruction_following_eval import evaluation_main
 
+    nltk_cache = Path.home() / ".cache" / "nltk_data"
+    if str(nltk_cache) not in nltk.data.path:
+        nltk.data.path.insert(0, str(nltk_cache))
+    for resource in ("tokenizers/punkt", "tokenizers/punkt_tab/english"):
+        try:
+            nltk.data.find(resource)
+        except LookupError as exc:
+            raise ContractError(
+                "missing NLTK scoring data; install punkt and punkt_tab in "
+                f"{nltk_cache}"
+            ) from exc
+    output_dir.mkdir(parents=True, exist_ok=True)
     model_answers = {arm: {str(question["question_id"]): record}}
     result = evaluation_main.evaluator([question], model_answers, str(output_dir), arm)["strict"]
     if len(result) != 1:

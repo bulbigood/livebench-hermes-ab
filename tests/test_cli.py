@@ -41,3 +41,7 @@ def test_configure_homes_minimizes_credentials(tmp_path: Path):
     assert yaml.safe_load((output / "base/config.yaml").read_text())["agent"][
         "reasoning_effort"
     ] == "low"
+    disabled = yaml.safe_load((output / "base/config.yaml").read_text())["agent"][
+        "disabled_toolsets"
+    ]
+    assert "terminal" in disabled and "web" in disabled and "memory" in disabled
