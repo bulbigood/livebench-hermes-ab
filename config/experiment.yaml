@@ -1,0 +1,36 @@
+experiment_id: livebench-hermes-low-vs-moa-default-v1
+upstream_commit: 00eae856aa1c1a9e9d058a65a9a94d85884034c4
+release: "2026-06-25"
+seed: 5601
+sample_size: 5
+selection_categories:
+  - math
+  - reasoning
+  - data_analysis
+  - language
+  - instruction_following
+concurrency: 1
+max_tokens: 4096
+question_globs:
+  - data/live_bench/*/*/question.jsonl
+arms:
+  base:
+    provider: openai-codex
+    model: gpt-5.6-sol
+    reasoning_effort: low
+    moa_enabled: false
+  moa:
+    provider: moa
+    model: default
+    reasoning_effort: low
+    moa_enabled: true
+    preset: default
+    aggregator:
+      provider: openai-codex
+      model: gpt-5.6-sol
+      reasoning_effort: low
+    references:
+      - provider: openrouter
+        model: minimax/minimax-m3
+judge:
+  implementation: livebench-objective-ground-truth

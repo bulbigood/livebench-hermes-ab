@@ -1,0 +1,43 @@
+[project]
+name = "livebench-hermes-ab"
+version = "0.1.0"
+description = "Paired LiveBench A/B harness for Hermes BASE vs MoA"
+requires-python = ">=3.11"
+dependencies = [
+  "pyyaml>=6.0.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.3", "ruff>=0.9"]
+livebench = [
+  "absl-py>=2.1",
+  "datasets>=3.2",
+  "immutabledict>=4.2",
+  "langdetect>=1.0.9",
+  "lark>=1.2",
+  "nltk>=3.9",
+  "openai>=2.0",
+  "python-dotenv>=1.0",
+  "rich>=13.9",
+  "shortuuid>=1.0",
+  "sympy>=1.13",
+  "tenacity>=9.0",
+  "tqdm>=4.67",
+]
+
+[project.scripts]
+livebench-hermes-ab = "livebench_hermes_ab.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/livebench_hermes_ab"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
