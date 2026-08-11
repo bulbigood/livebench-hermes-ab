@@ -2,7 +2,11 @@ from pathlib import Path
 
 import yaml
 
-from livebench_hermes_ab.cli import configure_homes
+from livebench_hermes_ab.cli import configure_homes, effective_timeout
+
+
+def test_timeout_comes_from_frozen_generation_contract():
+    assert effective_timeout({"generation": {"timeout_seconds": 1800}}) == 1800
 
 
 def test_configure_homes_minimizes_credentials(tmp_path: Path):
@@ -18,6 +22,7 @@ def test_configure_homes_minimizes_credentials(tmp_path: Path):
             "base": {
                 "model": "gpt-5.6-sol",
                 "provider": "openai-codex",
+                "reasoning_effort": "medium",
                 "moa_enabled": False,
             },
             "moa": {
@@ -28,7 +33,7 @@ def test_configure_homes_minimizes_credentials(tmp_path: Path):
                 "aggregator": {
                     "provider": "openai-codex",
                     "model": "gpt-5.6-sol",
-                    "reasoning_effort": "low",
+                    "reasoning_effort": "medium",
                 },
             },
         },
@@ -38,9 +43,10 @@ def test_configure_homes_minimizes_credentials(tmp_path: Path):
     assert (output / "base/.env").read_text() == "\n"
     assert (output / "moa/.env").read_text() == "OPENROUTER_API_KEY=allowed\n"
     assert (output / "base/auth.json").is_symlink()
-    assert yaml.safe_load((output / "base/config.yaml").read_text())["agent"][
-        "reasoning_effort"
-    ] == "low"
+    assert (
+        yaml.safe_load((output / "base/config.yaml").read_text())["agent"]["reasoning_effort"]
+        == "medium"
+    )
     disabled = yaml.safe_load((output / "base/config.yaml").read_text())["agent"][
         "disabled_toolsets"
     ]

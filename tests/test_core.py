@@ -13,19 +13,19 @@ def config():
             "base": {
                 "provider": "openai-codex",
                 "model": "gpt-5.6-sol",
-                "reasoning_effort": "low",
+                "reasoning_effort": "medium",
                 "moa_enabled": False,
             },
             "moa": {
                 "provider": "moa",
                 "model": "default",
-                "reasoning_effort": "low",
+                "reasoning_effort": "medium",
                 "moa_enabled": True,
                 "preset": "default",
                 "aggregator": {
                     "provider": "openai-codex",
                     "model": "gpt-5.6-sol",
-                    "reasoning_effort": "low",
+                    "reasoning_effort": "medium",
                 },
                 "references": [
                     {"provider": "openrouter", "model": "minimax/minimax-m3"}
@@ -70,6 +70,16 @@ def test_pair_order_is_balanced_and_deterministic():
         ["base", "moa"],
     ]
     assert len({p["pair_id"] for p in one}) == 5
+
+
+def test_pair_matrix_has_five_samples_per_task_and_unique_cells():
+    questions = [{"question_id": "q1"}, {"question_id": "q2"}]
+    pairs = make_pairs(questions, seed=7, samples_per_task=5)
+    assert len(pairs) == 10
+    assert {(p["question_id"], p["sample_index"]) for p in pairs} == {
+        (qid, sample) for qid in ("q1", "q2") for sample in range(5)
+    }
+    assert len({p["pair_id"] for p in pairs}) == 10
 
 
 def test_snapshot_filter_matches_livebench_removal_cutoff():

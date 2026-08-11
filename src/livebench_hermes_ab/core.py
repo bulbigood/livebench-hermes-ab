@@ -28,8 +28,10 @@ def validate_treatment_boundary(config: dict[str, Any]) -> None:
     for key in ("provider", "model", "reasoning_effort"):
         if base.get(key) != agg.get(key):
             raise ContractError(f"BASE and MoA aggregator differ at {key}")
-    if base.get("reasoning_effort") != "low" or moa.get("reasoning_effort") != "low":
-        raise ContractError("both arms must use low reasoning")
+    if base.get("reasoning_effort") not in {"low", "medium"}:
+        raise ContractError("unsupported reasoning effort")
+    if moa.get("reasoning_effort") != base.get("reasoning_effort"):
+        raise ContractError("both arms must use identical reasoning")
     if base.get("moa_enabled") is not False or moa.get("moa_enabled") is not True:
         raise ContractError("MoA must be the only treatment")
     if moa.get("provider") != "moa" or moa.get("preset") != moa.get("model"):
@@ -96,17 +98,26 @@ def select_stratified_complexity(
     return chosen
 
 
-def make_pairs(questions: list[dict[str, Any]], seed: int) -> list[dict[str, Any]]:
-    ordered = sorted(questions, key=lambda q: str(q["question_id"]))
+def make_pairs(
+    questions: list[dict[str, Any]], seed: int, samples_per_task: int = 1
+) -> list[dict[str, Any]]:
+    if samples_per_task < 1:
+        raise ContractError("samples_per_task must be positive")
+    ordered = [
+        (question, sample_index)
+        for question in sorted(questions, key=lambda q: str(q["question_id"]))
+        for sample_index in range(samples_per_task)
+    ]
     rng = random.Random(seed)
     rng.shuffle(ordered)
     result = []
-    for idx, question in enumerate(ordered):
+    for idx, (question, sample_index) in enumerate(ordered):
         qid = str(question["question_id"])
         result.append(
             {
-                "pair_id": sha256_bytes(f"{seed}:{qid}".encode())[:16],
+                "pair_id": sha256_bytes(f"{seed}:{qid}:{sample_index}".encode())[:16],
                 "question_id": qid,
+                "sample_index": sample_index,
                 "order": ["base", "moa"] if idx % 2 == 0 else ["moa", "base"],
             }
         )

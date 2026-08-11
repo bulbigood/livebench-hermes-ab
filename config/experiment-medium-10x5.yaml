@@ -1,0 +1,49 @@
+experiment_id: livebench-hermes-medium-10new-5samples-v1
+upstream_commit: 00eae856aa1c1a9e9d058a65a9a94d85884034c4
+release: '2026-06-25'
+seed: 5601
+selection:
+  new_task_count: 10
+  math_task_count: 1
+  question_ids:
+  - 504e4f0317a2bb481c7878ee625c1686135211da8df19744d2b78c9598f13761
+  - 6bd178380f1808eadda3b1565ac385a0ed891cb438a611a8142e9002ac35bbe4
+  - d968c11d5c594e036b8cdcb02bfd1e3251d48d1b21d8a6f9ab86eb6926ac50f8
+  - dc753a46614f7f4d1c839d06ec864324f8b6142e30bf804dae6aae8b6eb91941
+  - bfe58cf09204ef9dddeb7358323fbab09c078fbc88d022c2387e0eada4470849
+  - c94b09d2821d5c5bc7b4c5539a9dc2a9d28b862c78870e2e0117e5d73ebd0208
+  - 181616b71589f6ea32ce70228a57497526abb72f096af8f8a4ddac2196b297de
+  - 1a06f223c7988766f6c876404f04df808915b4bb08d1fca784eadec17e502973
+  - a365e843fd014371b5de486fb1f161db1a3497dd3338268d33d5569f5f4d7185
+  - c0e4dc6b1c4cca07e408c5952ee4013a46a8663f0fc7684453ed5ce56b87e0c9
+generation:
+  samples_per_task: 5
+  retry:
+    max_attempts: 1
+    retry_only: none
+  timeout_seconds: 1800
+concurrency: 1
+max_tokens: 4096
+question_globs:
+- data/live_bench/*/*/question.jsonl
+arms:
+  base:
+    provider: openai-codex
+    model: gpt-5.6-sol
+    reasoning_effort: medium
+    moa_enabled: false
+  moa:
+    provider: moa
+    model: default
+    reasoning_effort: medium
+    moa_enabled: true
+    preset: default
+    aggregator:
+      provider: openai-codex
+      model: gpt-5.6-sol
+      reasoning_effort: medium
+    references:
+    - provider: openrouter
+      model: minimax/minimax-m3
+judge:
+  implementation: livebench-objective-ground-truth

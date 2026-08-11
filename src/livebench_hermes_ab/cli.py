@@ -28,10 +28,31 @@ from .trace_validation import validate_moa_traces
 ROOT = Path(__file__).resolve().parents[2]
 
 DISABLED_TOOLSETS = [
-    "web", "browser", "terminal", "file", "code_execution", "vision",
-    "video", "image_gen", "video_gen", "bfl", "x_search", "tts", "stt",
-    "skills", "todo", "memory", "context_engine", "session_search", "clarify",
-    "delegation", "cronjob", "homeassistant", "spotify", "yuanbao", "computer_use",
+    "web",
+    "browser",
+    "terminal",
+    "file",
+    "code_execution",
+    "vision",
+    "video",
+    "image_gen",
+    "video_gen",
+    "bfl",
+    "x_search",
+    "tts",
+    "stt",
+    "skills",
+    "todo",
+    "memory",
+    "context_engine",
+    "session_search",
+    "clarify",
+    "delegation",
+    "cronjob",
+    "homeassistant",
+    "spotify",
+    "yuanbao",
+    "computer_use",
 ]
 
 
@@ -41,6 +62,13 @@ def load_config(path: Path) -> dict[str, Any]:
     return config
 
 
+def effective_timeout(config: dict[str, Any]) -> int:
+    timeout = int(config.get("generation", {}).get("timeout_seconds", 0))
+    if timeout <= 0:
+        raise ContractError("generation.timeout_seconds must be positive")
+    return timeout
+
+
 def configure_homes(config: dict[str, Any], source_home: Path, output_root: Path) -> None:
     for arm_name, arm in config["arms"].items():
         home = output_root / arm_name
@@ -48,7 +76,9 @@ def configure_homes(config: dict[str, Any], source_home: Path, output_root: Path
         cfg: dict[str, Any] = {
             "model": {"default": arm["model"], "provider": arm["provider"]},
             "agent": {
-                "reasoning_effort": "low",
+                "reasoning_effort": str(
+                    arm.get("reasoning_effort") or arm.get("aggregator", {}).get("reasoning_effort")
+                ),
                 "disabled_toolsets": DISABLED_TOOLSETS,
             },
             "moa": {
@@ -150,22 +180,34 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
     )
     if not questions:
         raise ContractError(f"no active questions for LiveBench release {config['release']}")
-    selected = select_stratified_complexity(
-        questions,
-        [str(category) for category in config["selection_categories"]],
-        int(config["seed"]),
-    )
-    sample_size = int(config["sample_size"])
-    if sample_size != len(selected):
-        raise ContractError("sample_size must equal the number of selection_categories")
-    selected_pairs = make_pairs(selected, int(config["seed"]))
-    selected_ids = {pair["question_id"] for pair in selected_pairs}
-    selected = [q for q in selected if str(q["question_id"]) in selected_ids]
-    selected.sort(
-        key=lambda q: next(
-            i for i, pair in enumerate(selected_pairs) if pair["question_id"] == str(q["question_id"])
+    if "selection" in config:
+        selection = config["selection"]
+        requested_ids = [str(value) for value in selection["question_ids"]]
+        if len(requested_ids) != len(set(requested_ids)):
+            raise ContractError("selection contains duplicate question IDs")
+        by_question_id = {str(q["question_id"]): q for q in questions}
+        missing = [qid for qid in requested_ids if qid not in by_question_id]
+        if missing:
+            raise ContractError(f"selected question IDs unavailable: {missing}")
+        selected = [by_question_id[qid] for qid in requested_ids]
+        if len(selected) != int(selection["new_task_count"]):
+            raise ContractError("new_task_count does not match frozen question IDs")
+        math_count = sum(q.get("category") == "math" for q in selected)
+        if math_count != int(selection["math_task_count"]):
+            raise ContractError("math task cardinality mismatch")
+        samples_per_task = int(config["generation"]["samples_per_task"])
+        selection_method = "frozen explicit question IDs; output-blind stratified shortlist"
+    else:
+        selected = select_stratified_complexity(
+            questions,
+            [str(category) for category in config["selection_categories"]],
+            int(config["seed"]),
         )
-    )
+        if int(config["sample_size"]) != len(selected):
+            raise ContractError("sample_size must equal the number of selection_categories")
+        samples_per_task = 1
+        selection_method = "one-per-category blind complexity rank"
+    selected_pairs = make_pairs(selected, int(config["seed"]), samples_per_task)
 
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     configure_homes(config, source_home, run_dir / "homes")
@@ -176,8 +218,17 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
         "config_sha256": sha256_bytes(config_path.read_bytes()),
         "question_file_sha256": {str(p): sha256_bytes(p.read_bytes()) for p in question_paths},
         "question_count": len(questions),
-        "sample_size": len(selected),
-        "expected_cells": len(selected) * 2,
+        "task_count": len(selected),
+        "samples_per_task": samples_per_task,
+        "paired_units": len(selected_pairs),
+        "expected_cells": len(selected_pairs) * 2,
+        "expected_model_calls": {
+            "base_main": len(selected_pairs),
+            "moa_aggregator": len(selected_pairs),
+            "moa_references": len(selected_pairs) * len(config["arms"]["moa"]["references"]),
+            "judge": 0,
+            "total": len(selected_pairs) * (2 + len(config["arms"]["moa"]["references"])),
+        },
         "pairs": selected_pairs,
         "questions_sha256": sha256_bytes(canonical_json(sanitized_questions)),
         "home_config_sha256": {
@@ -185,9 +236,18 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
             for arm in config["arms"]
         },
         "selection": {
-            "method": "one-per-category blind complexity rank",
-            "categories": config["selection_categories"],
-            "features": ["level", "constraint_count", "turn_count", "prompt_chars", "seeded_hash"],
+            "method": selection_method,
+            "question_ids": [str(q["question_id"]) for q in selected],
+            "category_counts": {
+                category: sum(q.get("category") == category for q in selected)
+                for category in sorted({str(q.get("category")) for q in selected})
+            },
+        },
+        "execution_contract": {
+            "concurrency": int(config["concurrency"]),
+            "retries": int(config.get("generation", {}).get("retries", 0)),
+            "timeout_seconds": int(config.get("generation", {}).get("timeout_seconds", 900)),
+            "order": "seeded shuffle of task/sample units; alternating arm-first order",
         },
         "arms": config["arms"],
     }
@@ -199,9 +259,10 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
 def verify_run_integrity(config_path: Path, run_dir: Path, manifest: dict[str, Any]) -> None:
     if sha256_bytes(config_path.read_bytes()) != manifest["config_sha256"]:
         raise ContractError("experiment config drift after prepare")
-    if sha256_bytes((run_dir / "questions.json").read_bytes().rstrip(b"\n")) != manifest[
-        "questions_sha256"
-    ]:
+    if (
+        sha256_bytes((run_dir / "questions.json").read_bytes().rstrip(b"\n"))
+        != manifest["questions_sha256"]
+    ):
         raise ContractError("selected questions drift after prepare")
     for arm, expected in manifest["home_config_sha256"].items():
         actual = sha256_bytes((run_dir / "homes" / arm / "config.yaml").read_bytes())
@@ -244,7 +305,7 @@ def invoke_arm(
     }
 
 
-def run(config_path: Path, source_home: Path, run_dir: Path, timeout: int) -> None:
+def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
     config = load_config(config_path)
     manifest = prepare(config_path, source_home, run_dir)
     questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
@@ -265,11 +326,12 @@ def run(config_path: Path, source_home: Path, run_dir: Path, timeout: int) -> No
                 config["arms"][arm_name],
                 run_dir / "homes" / arm_name,
                 question,
-                timeout,
+                effective_timeout(config),
             )
             record = {
                 "question_id": question["question_id"],
                 "answer_id": sha256_bytes(f"{pair['pair_id']}:{arm_name}".encode())[:16],
+                "sample_index": pair["sample_index"],
                 "model_id": f"hermes-{arm_name}",
                 "choices": [{"index": 0, "turns": result["turns"]}],
                 "tstamp": time.time(),
@@ -281,8 +343,9 @@ def run(config_path: Path, source_home: Path, run_dir: Path, timeout: int) -> No
                 "api_info": {
                     "provider": config["arms"][arm_name]["provider"],
                     "api_name": config["arms"][arm_name]["model"],
-                    "reasoning_effort": "low",
+                    "reasoning_effort": config["arms"][arm_name]["reasoning_effort"],
                     "pair_id": pair["pair_id"],
+                    "sample_index": pair["sample_index"],
                     "response_sha256": result["stdout_sha256"],
                 },
             }
@@ -300,7 +363,7 @@ def parser() -> argparse.ArgumentParser:
     prep.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
     execute = sub.add_parser("run", help="Execute paid paired model calls")
     execute.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
-    execute.add_argument("--timeout", type=int, default=900)
+
     score = sub.add_parser("score", help="Run pinned deterministic LiveBench scorers")
     score.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
     return p
@@ -313,7 +376,7 @@ def main() -> None:
             manifest = prepare(args.config, args.source_hermes_home, args.run_dir)
             print(json.dumps(manifest, indent=2, ensure_ascii=False))
         elif args.command == "run":
-            run(args.config, args.source_hermes_home, args.run_dir, args.timeout)
+            run(args.config, args.source_hermes_home, args.run_dir)
         else:
             from .scoring import score_run
 
