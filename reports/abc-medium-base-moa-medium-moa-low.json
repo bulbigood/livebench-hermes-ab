@@ -1,0 +1,160 @@
+{
+  "arms": {
+    "A": "BASE, openai-codex:gpt-5.6-sol medium",
+    "B": "MoA, aggregator openai-codex:gpt-5.6-sol medium, Minimax M3 reference",
+    "C": "MoA, aggregator openai-codex:gpt-5.6-sol low, Minimax M3 reference"
+  },
+  "c_complete_cells": 50,
+  "common_cells": 49,
+  "comparisons": {
+    "A_to_B": {
+      "equal_task_mean_delta": 0.082525,
+      "left_mean": 0.9002040816326531,
+      "n": 49,
+      "right_mean": 0.968469387755102,
+      "sample_mean_delta": 0.06826530612244898,
+      "sample_wins_ties_regressions": {
+        "regressions": 0,
+        "ties": 43,
+        "wins": 6
+      },
+      "task_cluster_bootstrap_95pct": [
+        0.0,
+        0.238775
+      ],
+      "task_mean_deltas": {
+        "data_analysis/tablejoin/dc753a46614f": 0.044,
+        "data_analysis/tablereformat/bfe58cf09204": 0.0,
+        "instruction_following/paraphrase/a365e843fd01": 0.0,
+        "instruction_following/story_generation/c0e4dc6b1c4c": 0.0,
+        "instruction_following/summarize/1a06f223c798": 0.0,
+        "language/connections/181616b71589": 0.0,
+        "language/connections/c94b09d2821d": 0.0,
+        "math/math_comp/504e4f0317a2": 0.0,
+        "reasoning/spatial/d968c11d5c59": 0.0,
+        "reasoning/zebra_puzzle/6bd178380f18": 0.78125
+      },
+      "task_wins_ties_regressions": {
+        "regressions": 0,
+        "ties": 8,
+        "wins": 2
+      }
+    },
+    "A_to_C": {
+      "equal_task_mean_delta": 0.067775,
+      "left_mean": 0.9002040816326531,
+      "n": 49,
+      "right_mean": 0.9572448979591837,
+      "sample_mean_delta": 0.05704081632653061,
+      "sample_wins_ties_regressions": {
+        "regressions": 0,
+        "ties": 43,
+        "wins": 6
+      },
+      "task_cluster_bootstrap_95pct": [
+        0.0,
+        0.186525
+      ],
+      "task_mean_deltas": {
+        "data_analysis/tablejoin/dc753a46614f": 0.08399999999999999,
+        "data_analysis/tablereformat/bfe58cf09204": 0.0,
+        "instruction_following/paraphrase/a365e843fd01": 0.0,
+        "instruction_following/story_generation/c0e4dc6b1c4c": 0.0,
+        "instruction_following/summarize/1a06f223c798": 0.0,
+        "language/connections/181616b71589": 0.0,
+        "language/connections/c94b09d2821d": 0.0,
+        "math/math_comp/504e4f0317a2": 0.0,
+        "reasoning/spatial/d968c11d5c59": 0.0,
+        "reasoning/zebra_puzzle/6bd178380f18": 0.59375
+      },
+      "task_wins_ties_regressions": {
+        "regressions": 0,
+        "ties": 8,
+        "wins": 2
+      }
+    },
+    "C_to_B": {
+      "equal_task_mean_delta": 0.014750000000000001,
+      "left_mean": 0.9572448979591837,
+      "n": 49,
+      "right_mean": 0.968469387755102,
+      "sample_mean_delta": 0.011224489795918368,
+      "sample_wins_ties_regressions": {
+        "regressions": 3,
+        "ties": 43,
+        "wins": 3
+      },
+      "task_cluster_bootstrap_95pct": [
+        -0.011999999999999999,
+        0.05625
+      ],
+      "task_mean_deltas": {
+        "data_analysis/tablejoin/dc753a46614f": -0.039999999999999994,
+        "data_analysis/tablereformat/bfe58cf09204": 0.0,
+        "instruction_following/paraphrase/a365e843fd01": 0.0,
+        "instruction_following/story_generation/c0e4dc6b1c4c": 0.0,
+        "instruction_following/summarize/1a06f223c798": 0.0,
+        "language/connections/181616b71589": 0.0,
+        "language/connections/c94b09d2821d": 0.0,
+        "math/math_comp/504e4f0317a2": 0.0,
+        "reasoning/spatial/d968c11d5c59": 0.0,
+        "reasoning/zebra_puzzle/6bd178380f18": 0.1875
+      },
+      "task_wins_ties_regressions": {
+        "regressions": 1,
+        "ties": 8,
+        "wins": 1
+      }
+    }
+  },
+  "latency_common_cells": {
+    "A": {
+      "mean_s": 34.884469387755104,
+      "median_s": 17.606,
+      "total_s": 1709.3390000000002
+    },
+    "B": {
+      "mean_s": 94.62312244897959,
+      "median_s": 58.207,
+      "total_s": 4636.533
+    },
+    "C": {
+      "mean_s": 98.5885306122449,
+      "median_s": 64.601,
+      "total_s": 4830.837999999996
+    }
+  },
+  "limitations": [
+    "ABC headline uses the 49 cells common to all arms; C has one additional valid cell excluded from pairwise comparisons.",
+    "The A/B infrastructure exclusion was authorized after its timeout, so status is not a pristine 50-cell confirmatory design.",
+    "Task-cluster intervals are descriptive with only ten heterogeneous tasks.",
+    "Main-model token telemetry is incomplete; no USD comparison is inferred."
+  ],
+  "reference_telemetry": {
+    "B": {
+      "aggregator_model": "gpt-5.6-sol",
+      "aggregator_provider": "openai-codex",
+      "answer_trace_hashes_match": true,
+      "reference_calls": 49,
+      "reference_input_tokens": 49189,
+      "reference_model": "minimax/minimax-m3",
+      "reference_output_tokens": 204976,
+      "reference_provider": "openrouter",
+      "status": "valid",
+      "trace_records": 49
+    },
+    "C": {
+      "aggregator_model": "gpt-5.6-sol",
+      "aggregator_provider": "openai-codex",
+      "answer_trace_hashes_match": true,
+      "reference_calls": 50,
+      "reference_input_tokens": 49030,
+      "reference_model": "minimax/minimax-m3",
+      "reference_output_tokens": 241603,
+      "reference_provider": "openrouter",
+      "status": "valid",
+      "trace_records": 50
+    }
+  },
+  "status": "VALID_ABC_ON_49_COMMON_CELLS"
+}
