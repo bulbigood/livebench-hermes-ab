@@ -1,8 +1,17 @@
+import threading
+import time
 from pathlib import Path
 
+import pytest
 import yaml
 
-from livebench_hermes_ab.cli import configure_homes, effective_timeout
+from livebench_hermes_ab.cli import (
+    configure_homes,
+    effective_timeout,
+    invoke_pair_parallel,
+    paired_arm_parallelism,
+)
+from livebench_hermes_ab.core import ContractError
 
 
 def test_timeout_comes_from_frozen_generation_contract():
@@ -51,3 +60,43 @@ def test_configure_homes_minimizes_credentials(tmp_path: Path):
         "disabled_toolsets"
     ]
     assert "terminal" in disabled and "web" in disabled and "memory" in disabled
+
+
+def test_pair_invocation_runs_one_worker_per_arm_concurrently(tmp_path: Path):
+    barrier = threading.Barrier(2)
+    active = {"base": 0, "moa": 0}
+    peak = {"base": 0, "moa": 0}
+    lock = threading.Lock()
+
+    def fake_invoke(arm_name, arm, home, question, timeout):
+        with lock:
+            active[arm_name] += 1
+            peak[arm_name] = max(peak[arm_name], active[arm_name])
+        barrier.wait(timeout=1)
+        time.sleep(0.01)
+        with lock:
+            active[arm_name] -= 1
+        return {"turns": [arm_name], "total_time_s": 0.01, "stdout_sha256": arm_name}
+
+    result = invoke_pair_parallel(
+        arms={"base": {}, "moa": {}},
+        homes={"base": tmp_path / "base", "moa": tmp_path / "moa"},
+        question={"question_id": "q1", "turns": ["prompt"]},
+        timeout=30,
+        invoke=fake_invoke,
+    )
+
+    assert set(result) == {"base", "moa"}
+    assert peak == {"base": 1, "moa": 1}
+
+
+def test_paired_arm_contract_rejects_more_than_one_worker_per_arm():
+    config = {
+        "concurrency": 3,
+        "execution": {
+            "parallelism": "paired_arms",
+            "workers_per_arm": {"base": 1, "moa": 2},
+        },
+    }
+    with pytest.raises(ContractError, match="paired_arms requires"):
+        paired_arm_parallelism(config)

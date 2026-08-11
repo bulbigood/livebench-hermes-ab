@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,19 @@ def effective_timeout(config: dict[str, Any]) -> int:
     if timeout <= 0:
         raise ContractError("generation.timeout_seconds must be positive")
     return timeout
+
+
+def paired_arm_parallelism(config: dict[str, Any]) -> bool:
+    execution = config.get("execution", {})
+    if execution.get("parallelism") != "paired_arms":
+        return False
+    expected_workers = {"base": 1, "moa": 1}
+    workers = execution.get("workers_per_arm")
+    if workers != expected_workers or int(config.get("concurrency", 0)) != 2:
+        raise ContractError(
+            "paired_arms requires concurrency: 2 and workers_per_arm: {base: 1, moa: 1}"
+        )
+    return True
 
 
 def configure_homes(config: dict[str, Any], source_home: Path, output_root: Path) -> None:
@@ -254,9 +268,17 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
         },
         "execution_contract": {
             "concurrency": int(config["concurrency"]),
+            "parallelism": config.get("execution", {}).get("parallelism", "sequential"),
+            "workers_per_arm": config.get("execution", {}).get(
+                "workers_per_arm", {"base": 1, "moa": 1}
+            ),
             "retries": int(config.get("generation", {}).get("retries", 0)),
             "timeout_seconds": int(config.get("generation", {}).get("timeout_seconds", 900)),
-            "order": "seeded shuffle of task/sample units; alternating arm-first order",
+            "order": (
+                "seeded task/sample order; BASE and MoA synchronized per pair"
+                if paired_arm_parallelism(config)
+                else "seeded shuffle of task/sample units; alternating arm-first order"
+            ),
         },
         "arms": config["arms"],
     }
@@ -314,6 +336,23 @@ def invoke_arm(
     }
 
 
+def invoke_pair_parallel(
+    arms: dict[str, dict[str, Any]],
+    homes: dict[str, Path],
+    question: dict[str, Any],
+    timeout: int,
+    invoke=invoke_arm,
+) -> dict[str, dict[str, Any]]:
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="livebench-arm") as executor:
+        futures = {
+            arm_name: executor.submit(
+                invoke, arm_name, arms[arm_name], homes[arm_name], question, timeout
+            )
+            for arm_name in ("base", "moa")
+        }
+        return {arm_name: future.result() for arm_name, future in futures.items()}
+
+
 def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
     config = load_config(config_path)
     manifest = prepare(config_path, source_home, run_dir)
@@ -328,15 +367,27 @@ def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
         )
     for pair in manifest["pairs"]:
         question = by_id[pair["question_id"]]
-        for arm_name in pair["order"]:
-            verify_run_integrity(config_path, run_dir, manifest)
-            result = invoke_arm(
-                arm_name,
-                config["arms"][arm_name],
-                run_dir / "homes" / arm_name,
+        verify_run_integrity(config_path, run_dir, manifest)
+        if paired_arm_parallelism(config):
+            results = invoke_pair_parallel(
+                config["arms"],
+                {arm: run_dir / "homes" / arm for arm in ("base", "moa")},
                 question,
                 effective_timeout(config),
             )
+        else:
+            results = {
+                arm_name: invoke_arm(
+                    arm_name,
+                    config["arms"][arm_name],
+                    run_dir / "homes" / arm_name,
+                    question,
+                    effective_timeout(config),
+                )
+                for arm_name in pair["order"]
+            }
+        for arm_name in pair["order"]:
+            result = results[arm_name]
             record = {
                 "question_id": question["question_id"],
                 "answer_id": sha256_bytes(f"{pair['pair_id']}:{arm_name}".encode())[:16],

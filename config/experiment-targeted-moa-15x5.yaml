@@ -42,7 +42,12 @@ generation:
     max_attempts: 1
     retry_only: none
   timeout_seconds: 1800
-concurrency: 1
+concurrency: 2
+execution:
+  parallelism: paired_arms
+  workers_per_arm:
+    base: 1
+    moa: 1
 max_tokens: 4096
 question_globs:
 - data/live_bench/*/*/question.jsonl
