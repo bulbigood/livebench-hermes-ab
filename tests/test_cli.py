@@ -65,6 +65,12 @@ def test_configure_homes_minimizes_credentials(tmp_path: Path):
         yaml.safe_load((output / "base/config.yaml").read_text())["agent"]["reasoning_effort"]
         == "medium"
     )
+    assert (
+        yaml.safe_load((output / "moa/config.yaml").read_text())["moa"]["presets"]["default"][
+            "reference_max_tokens"
+        ]
+        == 30000
+    )
     disabled = yaml.safe_load((output / "base/config.yaml").read_text())["agent"][
         "disabled_toolsets"
     ]

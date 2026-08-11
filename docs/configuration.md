@@ -87,7 +87,7 @@ arms:
           default:
             enabled: true
             degraded_reference_policy: loud
-            reference_max_tokens: 10000
+            reference_max_tokens: 30000
             max_tokens: 4096
             fanout: every_n:3
             reference_models:

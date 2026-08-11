@@ -1,7 +1,7 @@
 # Harness settings are outside each arm. Every arms.<name>.hermes subtree is
 # copied verbatim to runs/<run>/homes/<name>/config.yaml. Never put secrets here.
 experiment:
-  id: livebench-hermes-targeted-moa-15x5-v2
+  id: livebench-hermes-targeted-moa-15x5-v3
   upstream_commit: 00eae856aa1c1a9e9d058a65a9a94d85884034c4
   release: '2026-06-25'
   seed: 5615
@@ -120,7 +120,7 @@ arms:
           default:
             enabled: true
             degraded_reference_policy: loud
-            reference_max_tokens: 10000
+            reference_max_tokens: 30000
             max_tokens: 4096
             fanout: every_n:3
             reference_models:
@@ -149,7 +149,7 @@ arms:
           default:
             enabled: true
             degraded_reference_policy: loud
-            reference_max_tokens: 10000
+            reference_max_tokens: 30000
             max_tokens: 4096
             fanout: every_n:3
             reference_models:
