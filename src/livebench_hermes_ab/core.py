@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import re
 from pathlib import Path
 from typing import Any
 
@@ -103,8 +104,93 @@ def select_stratified_complexity(
     return chosen
 
 
+def resolve_explicit_scenarios(
+    questions: list[dict[str, Any]], selection: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Resolve one experiment-global scenario list against the pinned corpus."""
+
+    has_flat = "question_ids" in selection
+    has_grouped = "scenarios" in selection
+    if has_flat == has_grouped:
+        raise ContractError("selection must define exactly one of question_ids or scenarios")
+
+    specs: list[dict[str, str]] = []
+    if has_flat:
+        values = selection["question_ids"]
+        if not isinstance(values, list) or not values:
+            raise ContractError("selection.question_ids must be a non-empty list")
+        for value in values:
+            if not isinstance(value, str) or not value.strip():
+                raise ContractError("selection.question_ids entries must be non-empty strings")
+            specs.append({"id": value})
+    else:
+        groups = selection["scenarios"]
+        if not isinstance(groups, dict) or not groups:
+            raise ContractError("selection.scenarios must be a non-empty category mapping")
+        allowed_keys = {"id", "family", "source_url", "note"}
+        for category, entries in groups.items():
+            if not isinstance(category, str) or not category.strip():
+                raise ContractError("scenario category names must be non-empty strings")
+            if not isinstance(entries, list) or not entries:
+                raise ContractError(f"selection.scenarios.{category} must be a non-empty list")
+            for index, entry in enumerate(entries):
+                path = f"selection.scenarios.{category}[{index}]"
+                if not isinstance(entry, dict):
+                    raise ContractError(f"{path} must be a mapping")
+                unknown = sorted(set(entry) - allowed_keys)
+                if unknown:
+                    raise ContractError(f"{path} contains unsupported keys: {unknown}")
+                scenario_id = entry.get("id")
+                family = entry.get("family")
+                if not isinstance(scenario_id, str) or not scenario_id.strip():
+                    raise ContractError(f"{path}.id must be a non-empty string")
+                if not isinstance(family, str) or not family.strip():
+                    raise ContractError(f"{path}.family must be a non-empty string")
+                spec = {"id": scenario_id, "category": category, "family": family}
+                for metadata_key in ("source_url", "note"):
+                    if metadata_key not in entry:
+                        continue
+                    metadata = entry[metadata_key]
+                    if not isinstance(metadata, str) or not metadata.strip():
+                        raise ContractError(f"{path}.{metadata_key} must be a non-empty string")
+                    if metadata_key == "source_url" and not re.fullmatch(r"https?://\S+", metadata):
+                        raise ContractError(f"{path}.source_url must be an HTTP(S) URL")
+                    spec[metadata_key] = metadata
+                specs.append(spec)
+
+    scenario_ids = [spec["id"] for spec in specs]
+    if len(scenario_ids) != len(set(scenario_ids)):
+        raise ContractError("selection contains duplicate scenario IDs")
+    by_question_id = {str(question["question_id"]): question for question in questions}
+    missing = [scenario_id for scenario_id in scenario_ids if scenario_id not in by_question_id]
+    if missing:
+        raise ContractError(f"selected scenario IDs unavailable: {missing}")
+
+    selected: list[dict[str, Any]] = []
+    resolved: list[dict[str, str]] = []
+    for spec in specs:
+        question = by_question_id[spec["id"]]
+        actual_category = str(question.get("category"))
+        actual_family = str(question.get("task"))
+        if "category" in spec and spec["category"] != actual_category:
+            raise ContractError(
+                f"scenario {spec['id']} category mismatch: configured {spec['category']}, "
+                f"corpus has {actual_category}"
+            )
+        if "family" in spec and spec["family"] != actual_family:
+            raise ContractError(
+                f"scenario {spec['id']} family mismatch: configured {spec['family']}, "
+                f"corpus has {actual_family}"
+            )
+        metadata = {"id": spec["id"], "category": actual_category, "family": actual_family}
+        metadata.update({key: spec[key] for key in ("source_url", "note") if key in spec})
+        selected.append(question)
+        resolved.append(metadata)
+    return selected, resolved
+
+
 def validate_frozen_selection(selected: list[dict[str, Any]], selection: dict[str, Any]) -> None:
-    if len(selected) != int(selection["new_task_count"]):
+    if "new_task_count" in selection and len(selected) != int(selection["new_task_count"]):
         raise ContractError("new_task_count does not match frozen question IDs")
     expected_counts = selection.get("category_task_counts")
     if expected_counts is not None:

@@ -6,6 +6,7 @@ from livebench_hermes_ab.core import (
     build_prompt,
     filter_livebench_snapshot,
     make_pairs,
+    resolve_explicit_scenarios,
     validate_frozen_selection,
     validate_treatment_boundary,
 )
@@ -136,3 +137,81 @@ def test_frozen_selection_enforces_exact_task_family_counts():
     selection["task_family_counts"] = {"reasoning": {"zebra_puzzle": 2}}
     with pytest.raises(ContractError, match="task family cardinality mismatch"):
         validate_frozen_selection(selected, selection)
+
+
+def test_grouped_scenarios_resolve_in_config_order_with_metadata():
+    questions = [
+        {"question_id": "r1", "category": "reasoning", "task": "spatial"},
+        {"question_id": "d1", "category": "data_analysis", "task": "tablejoin"},
+    ]
+    selected, resolved = resolve_explicit_scenarios(
+        questions,
+        {
+            "scenarios": {
+                "data_analysis": [
+                    {
+                        "id": "d1",
+                        "family": "tablejoin",
+                        "source_url": "https://example.test/d1",
+                    }
+                ],
+                "reasoning": [{"id": "r1", "family": "spatial", "note": "hard"}],
+            }
+        },
+    )
+
+    assert [row["question_id"] for row in selected] == ["d1", "r1"]
+    assert resolved == [
+        {
+            "id": "d1",
+            "category": "data_analysis",
+            "family": "tablejoin",
+            "source_url": "https://example.test/d1",
+        },
+        {"id": "r1", "category": "reasoning", "family": "spatial", "note": "hard"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("scenarios", "message"),
+    [
+        (
+            {"data_analysis": [{"id": "r1", "family": "spatial"}]},
+            "category mismatch",
+        ),
+        (
+            {"reasoning": [{"id": "r1", "family": "zebra_puzzle"}]},
+            "family mismatch",
+        ),
+        (
+            {"reasoning": [{"id": "r1", "family": "spatial", "source_url": "not-a-url"}]},
+            "must be an HTTP",
+        ),
+        (
+            {
+                "reasoning": [{"id": "r1", "family": "spatial"}],
+                "data_analysis": [{"id": "r1", "family": "spatial"}],
+            },
+            "duplicate scenario IDs",
+        ),
+        (
+            {"reasoning": [{"id": "missing", "family": "spatial"}]},
+            "scenario IDs unavailable",
+        ),
+    ],
+)
+def test_grouped_scenarios_fail_closed(scenarios, message):
+    questions = [{"question_id": "r1", "category": "reasoning", "task": "spatial"}]
+    with pytest.raises(ContractError, match=message):
+        resolve_explicit_scenarios(questions, {"scenarios": scenarios})
+
+
+def test_selection_rejects_ambiguous_flat_and_grouped_scenarios():
+    with pytest.raises(ContractError, match="exactly one"):
+        resolve_explicit_scenarios(
+            [{"question_id": "r1", "category": "reasoning", "task": "spatial"}],
+            {
+                "question_ids": ["r1"],
+                "scenarios": {"reasoning": [{"id": "r1", "family": "spatial"}]},
+            },
+        )

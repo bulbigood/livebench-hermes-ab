@@ -74,11 +74,39 @@ The root [`config.yaml`](config.yaml) has two layers.
 ### Harness-owned sections
 
 - `experiment`: immutable experiment identity, upstream revision, release, seed, and question paths.
-- `selection`: exact frozen question IDs and expected category/family composition.
+- `selection`: one exact experiment-global scenario list shared by every arm.
 - `generation`: samples, retries, and per-Hermes-process timeout.
 - `execution`: baseline arm and concurrency policy.
 - `scoring`: local objective scorer declaration.
 - `arms.<name>.credential_env`: names of environment variables allowed in that arm.
+
+### Configure the shared scenarios
+
+Declare scenarios once under category-grouped YAML bullet lists:
+
+```yaml
+selection:
+  scenarios:
+    reasoning:
+      - id: "<LiveBench question_id>"
+        family: zebra_puzzle
+        source_url: "https://example.org/provenance"  # optional
+        note: "level 20"                              # optional
+    coding:
+      - id: "<LiveBench question_id>"
+        family: code_generation
+    data_analysis:
+      - id: "<LiveBench question_id>"
+        family: tablejoin
+```
+
+The section key is the expected LiveBench `category`. `family` is the expected LiveBench `task`. Both are checked against the local corpus pinned by `experiment.upstream_commit` and `experiment.release`; they are not decorative labels. Category names are not hard-coded, so `coding`, `math`, or another LiveBench category works when the selected IDs are present and active in that pinned corpus.
+
+`id` is the only executable selector. `source_url` and `note` are optional provenance metadata stored in the manifest; URLs are never fetched during `prepare`, execution, or scoring. This avoids turning an external website into an accidental benchmark dependency.
+
+The grouped list is resolved once before any arm runs. Duplicate IDs, unavailable or retired IDs, unsupported item keys, malformed URLs, and category/family mismatches fail `prepare`. Arm-local scenario overrides do not exist, so every arm receives the same frozen `(question_id, sample_index)` matrix.
+
+The manifest preserves the configured scenario order under `selection.scenarios`, records derived category/family counts, and stores `selection.scenarios_sha256`. Pair execution order is separately shuffled from the experiment seed. Legacy immutable configs using a flat `selection.question_ids` list remain supported, but a config cannot define both forms.
 
 ### Hermes-owned section
 
@@ -207,7 +235,7 @@ Inspect at least:
 - `execution_contract`;
 - `home_config_sha256`;
 - `hermes_compatibility.version`, `profile`, and per-arm `effective` values;
-- `selection.question_ids` and category counts.
+- `selection.scenarios`, `scenarios_sha256`, and derived category/family counts.
 
 The default config prepares 75 BASE calls, 75 MoA aggregator calls, and 75 reference calls: 225 model calls total and zero judge calls.
 

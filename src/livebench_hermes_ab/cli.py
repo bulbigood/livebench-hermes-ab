@@ -22,6 +22,7 @@ from .core import (
     filter_livebench_snapshot,
     load_jsonl,
     make_pairs,
+    resolve_explicit_scenarios,
     select_stratified_complexity,
     sha256_bytes,
     validate_frozen_selection,
@@ -477,17 +478,14 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
         raise ContractError(f"no active questions for LiveBench release {config['release']}")
     if "selection" in config:
         selection = config["selection"]
-        requested_ids = [str(value) for value in selection["question_ids"]]
-        if len(requested_ids) != len(set(requested_ids)):
-            raise ContractError("selection contains duplicate question IDs")
-        by_question_id = {str(q["question_id"]): q for q in questions}
-        missing = [qid for qid in requested_ids if qid not in by_question_id]
-        if missing:
-            raise ContractError(f"selected question IDs unavailable: {missing}")
-        selected = [by_question_id[qid] for qid in requested_ids]
+        selected, resolved_scenarios = resolve_explicit_scenarios(questions, selection)
         validate_frozen_selection(selected, selection)
         samples_per_task = int(config["generation"]["samples_per_task"])
-        selection_method = "frozen explicit question IDs; output-blind stratified shortlist"
+        selection_method = (
+            "frozen category-grouped scenario IDs"
+            if "scenarios" in selection
+            else "frozen explicit question IDs; output-blind stratified shortlist"
+        )
     else:
         selected = select_stratified_complexity(
             questions,
@@ -498,6 +496,14 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
             raise ContractError("sample_size must equal the number of selection_categories")
         samples_per_task = 1
         selection_method = "one-per-category blind complexity rank"
+        resolved_scenarios = [
+            {
+                "id": str(question["question_id"]),
+                "category": str(question.get("category")),
+                "family": str(question.get("task")),
+            }
+            for question in selected
+        ]
     execution_arms = list(config.get("execution_arms") or config["arms"])
     selected_pairs = make_pairs(
         selected, int(config["seed"]), samples_per_task, arms=execution_arms
@@ -550,8 +556,21 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
         "selection": {
             "method": selection_method,
             "question_ids": [str(q["question_id"]) for q in selected],
+            "scenarios": resolved_scenarios,
+            "scenarios_sha256": sha256_bytes(canonical_json(resolved_scenarios)),
             "category_counts": {
                 category: sum(q.get("category") == category for q in selected)
+                for category in sorted({str(q.get("category")) for q in selected})
+            },
+            "family_counts": {
+                category: {
+                    family: sum(
+                        q.get("category") == category and q.get("task") == family for q in selected
+                    )
+                    for family in sorted(
+                        {str(q.get("task")) for q in selected if str(q.get("category")) == category}
+                    )
+                }
                 for category in sorted({str(q.get("category")) for q in selected})
             },
         },
