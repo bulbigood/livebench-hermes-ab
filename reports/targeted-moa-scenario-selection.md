@@ -32,24 +32,25 @@ Across the 40 model rows in the official release table:
 | `spatial` | 98.000 | 100.000 | Near saturation; useful as a negative control |
 | `tablereformat` | 98.039 | 100.000 | Near saturation; useful as a mechanical exactness control |
 
-`cta` is active in the pinned local corpus but absent from the public 2026-06-25 table, so no public score is assigned to it here. These scores rank families, not exact question instances.
+`cta` is historical data still present in the public Hugging Face dataset, but it is absent from both the official 2026-06-25 manifest and score table. It is therefore excluded from the frozen cohort. These scores rank families, not exact question instances.
 
-## Complete available task-family inventory
+## Complete official task-family inventory
 
-| Category | Family | Corpus rows | Active rows | What it tests |
-|---|---|---:|---:|---|
-| Instruction Following | `summarize` | 100 | 50 | Content compression while satisfying exact lexical, length, section, and boundary constraints |
-| Instruction Following | `simplify` | 100 | 50 | Simplification without violating independently checked formatting and lexical constraints |
-| Instruction Following | `paraphrase` | 100 | 50 | Semantic preservation plus exact output constraints |
-| Instruction Following | `story_generation` | 100 | 50 | Long-form generation under simultaneous content and format constraints |
-| Reasoning | `zebra_puzzle` | 100 | 50 | Multi-attribute constraint satisfaction and exact entity assignment |
-| Reasoning | `spatial` | 50 | 50 | Geometric/spatial deduction with exact short answers |
-| Reasoning | `web_of_lies_v2` | 50 | 0 | Nested truthfulness reasoning; retired from the active snapshot on `2025-04-02` |
-| Data Analysis | `cta` | 50 | 50 | Column-type annotation from sparse samples and many semantically similar labels |
-| Data Analysis | `tablejoin` | 50 | 50 | Schema matching between noisy tables and exact join-map construction |
-| Data Analysis | `tablereformat` | 50 | 50 | Lossless conversion between table serializations |
+| Category | Official 2026-06-25 family | Question data available | What it tests |
+|---|---|---|---|
+| Instruction Following | `summarize` | Yes, 50 active rows | Content compression under exact constraints |
+| Instruction Following | `simplify` | Yes, 50 active rows | Simplification under exact constraints |
+| Instruction Following | `paraphrase` | Yes, 50 active rows | Semantic preservation under exact constraints |
+| Instruction Following | `story_generation` | Yes, 50 active rows | Long-form synthesis under exact constraints |
+| Reasoning | `theory_of_mind` | No public rows in the HF dataset | Reasoning about agents' internal states |
+| Reasoning | `zebra_puzzle` | Yes, 50 active rows | Multi-attribute constraint satisfaction |
+| Reasoning | `spatial` | Yes, 50 active rows | Geometric/spatial deduction |
+| Reasoning | `logic_with_navigation` | No public rows in the HF dataset | Symbolic logic combined with navigation |
+| Data Analysis | `consecutive_events` | No public rows in the HF dataset | Temporal event-sequence matching |
+| Data Analysis | `tablejoin` | Yes, 50 active rows | Noisy schema matching and join-map construction |
+| Data Analysis | `tablereformat` | Yes, 50 active rows | Lossless table conversion |
 
-There are only four active Instruction Following families, two active Reasoning families, and three active Data Analysis families. Five scenarios per category therefore means five question instances, not five distinct families.
+The official manifest is newer than the publicly downloadable question datasets. Missing families cannot be used in a reproducible local A/B run until their exact questions are published. Historical `web_of_lies_v2` and `cta` rows are present locally but are not members of the official 2026-06-25 release. Five scenarios per category therefore means five question instances, not five distinct families.
 
 ## Frozen 15-scenario cohort
 
@@ -75,19 +76,19 @@ This category deliberately covers all four active families. The second `summariz
 | `zebra_puzzle` | `2102018493646d36` | Declared level 20; 2,557-character prompt | Top-level active puzzle selected before model outputs |
 | `spatial` | `d968c11d5c594e03` | 701-character geometric construction with an exact numeric answer | Existing continuity item; preserves the only other active Reasoning family |
 
-All four zebra instances have the maximum declared active level, 20. `web_of_lies_v2` was considered but rejected because all of its rows are retired in the pinned snapshot. The 4:1 family skew is disclosed rather than hidden: current LiveBench simply offers only two active Reasoning families.
+All four zebra instances have the maximum declared active level, 20. `web_of_lies_v2` is retired; `theory_of_mind` and `logic_with_navigation` are listed in the official manifest but their questions are not published in the HF dataset. The 4:1 skew is therefore disclosed rather than hidden.
 
 ### Data Analysis — five scenarios
 
 | Family | Question ID prefix | Blind difficulty signal | Why retained/selected |
 |---|---|---|---|
-| `cta` | `58223a1f18c3cda8` | 6,848-character prompt; sparse/NaN sample; many near-duplicate labels | Hardest active CTA by prompt/candidate-list size |
-| `cta` | `d3d910189e70e5e5` | 6,100-character prompt; many near-duplicate labels | Second-largest active CTA and complementary hospital-data label space |
 | `tablejoin` | `dc753a46614f7f4d` | 4,466-character prompt; 162-character exact mapping | Existing continuity item and largest active join prompt |
 | `tablejoin` | `bd4b2031ad50538f` | 4,098-character prompt; 109-character exact mapping | Second-largest active join prompt; adds another schema-alignment case |
+| `tablejoin` | `a215b90180b10467` | 3,942-character prompt; 96-character exact mapping | Third-largest join prompt and a distinct schema pair |
+| `tablejoin` | `587e13e04d18246f` | 3,769-character prompt; 84-character exact mapping | Fourth high-burden join instance selected blind |
 | `tablereformat` | `bfe58cf09204ef9d` | 3,433-character source; 3,045-character exact ground truth | Existing continuity item and largest active reformat prompt |
 
-The 2:2:1 allocation emphasizes semantic ambiguity (`cta`, `tablejoin`) while retaining one large lossless transformation case. This is more diagnostic for MoA than filling the cohort with mechanically similar reformat cases.
+The 4:1 allocation follows the published difficulty evidence: `tablejoin` has median 47.384, while `tablereformat` is near-saturated at 98.039. `consecutive_events` cannot be selected because its official question rows are not publicly available.
 
 ## Why these scenarios are suitable for MoA A/B testing
 
@@ -95,7 +96,7 @@ MoA can help only where an independent reference has useful information that the
 
 1. **Constraint auditing — Instruction Following.** A reference can identify missed lexical, length, boundary, and formatting requirements. Multiple simultaneous objective checks make improvements measurable without an LLM judge.
 2. **Independent deduction — Reasoning.** Zebra and spatial questions permit a reference to solve or cross-check a constraint chain. Exact ground truth limits stylistic ambiguity.
-3. **Schema alignment — Data Analysis.** CTA and table-join tasks benefit from alternative interpretations of ambiguous labels and columns; table reformat tests whether extra context helps without corrupting a deterministic transformation.
+3. **Schema alignment — Data Analysis.** Table-join tasks benefit from independent interpretations of ambiguous labels and columns; table reformat tests whether extra context helps without corrupting a deterministic transformation.
 
 The cohort also contains failure opportunities for MoA: verbose advice can distract the aggregator, conflicting mappings can be copied, and already-easy deterministic tasks may show no gain while increasing latency. That makes the test diagnostic rather than promotional.
 
@@ -117,6 +118,7 @@ The cohort also contains failure opportunities for MoA: verbose advice can distr
 ## Limitations
 
 - Published evidence does not provide stable per-question difficulty values for these exact IDs, so structural proxies are necessary.
-- Reasoning diversity is constrained by the current snapshot: only zebra and spatial remain active.
+- The official manifest and public HF question datasets are temporarily inconsistent. Missing current families are disclosed and excluded rather than substituted with retired tasks.
+- Reasoning diversity is constrained to published zebra and spatial questions; Data Analysis is similarly constrained to published tablejoin and tablereformat questions.
 - Long prompts are not automatically difficult; length is used only alongside task-specific signals.
 - Five scenarios per category improve balance but remain too few for strong category-wide inference. Results must retain task-cluster uncertainty and per-task disclosure.

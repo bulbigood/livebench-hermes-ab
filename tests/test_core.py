@@ -120,3 +120,19 @@ def test_frozen_selection_enforces_exact_category_counts():
     selection["category_task_counts"] = {"reasoning": 1, "data_analysis": 2}
     with pytest.raises(ContractError, match="category task cardinality mismatch"):
         validate_frozen_selection(selected, selection)
+
+
+def test_frozen_selection_enforces_exact_task_family_counts():
+    selected = [
+        {"category": "reasoning", "task": "zebra_puzzle"},
+        {"category": "reasoning", "task": "spatial"},
+    ]
+    selection = {
+        "new_task_count": 2,
+        "category_task_counts": {"reasoning": 2},
+        "task_family_counts": {"reasoning": {"zebra_puzzle": 1, "spatial": 1}},
+    }
+    validate_frozen_selection(selected, selection)
+    selection["task_family_counts"] = {"reasoning": {"zebra_puzzle": 2}}
+    with pytest.raises(ContractError, match="task family cardinality mismatch"):
+        validate_frozen_selection(selected, selection)

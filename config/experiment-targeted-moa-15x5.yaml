@@ -8,6 +8,18 @@ selection:
     instruction_following: 5
     reasoning: 5
     data_analysis: 5
+  task_family_counts:
+    instruction_following:
+      summarize: 2
+      simplify: 1
+      paraphrase: 1
+      story_generation: 1
+    reasoning:
+      zebra_puzzle: 4
+      spatial: 1
+    data_analysis:
+      tablejoin: 4
+      tablereformat: 1
   question_ids:
   - 1a06f223c7988766f6c876404f04df808915b4bb08d1fca784eadec17e502973
   - 469c2a921e910fce7859e4c351f41c9a4cda6b028386904aa22afa09cbba5351
@@ -22,8 +34,8 @@ selection:
   - dc753a46614f7f4d1c839d06ec864324f8b6142e30bf804dae6aae8b6eb91941
   - bfe58cf09204ef9dddeb7358323fbab09c078fbc88d022c2387e0eada4470849
   - bd4b2031ad50538f365ac3312534d813fb7326fd90cf5056ac80b31d189cbb15
-  - 58223a1f18c3cda82967cc3ba7d24813209e41470aee583167ee938ae01d3d21
-  - d3d910189e70e5e5edd9a3f76420da1e8a5578b966ceef1c3936fb6b8e456551
+  - a215b90180b104679133c979614fe0feeb770b6a3d1df4d41065e15be2ed7051
+  - 587e13e04d18246f787cc8d41da67701eb1343795150a63b1996c5ec8270b20e
 generation:
   samples_per_task: 5
   retry:

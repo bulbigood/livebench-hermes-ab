@@ -119,6 +119,23 @@ def validate_frozen_selection(selected: list[dict[str, Any]], selection: dict[st
         math_count = sum(q.get("category") == "math" for q in selected)
         if math_count != int(selection["math_task_count"]):
             raise ContractError("math task cardinality mismatch")
+    expected_families = selection.get("task_family_counts")
+    if expected_families is not None:
+        actual_families: dict[str, dict[str, int]] = {}
+        for question in selected:
+            category = str(question.get("category"))
+            task = str(question.get("task"))
+            family_counts = actual_families.setdefault(category, {})
+            family_counts[task] = family_counts.get(task, 0) + 1
+        normalized_families = {
+            str(category): {str(task): int(count) for task, count in tasks.items()}
+            for category, tasks in expected_families.items()
+        }
+        if actual_families != normalized_families:
+            raise ContractError(
+                f"task family cardinality mismatch: expected {normalized_families}, "
+                f"got {actual_families}"
+            )
 
 
 def make_pairs(
