@@ -17,8 +17,8 @@ def test_default_moa_arms_differ_only_by_reference_model():
     minimax = deepcopy(config["arms"]["moa_minimax"])
     mimo = deepcopy(config["arms"]["moa_mimo"])
 
-    assert minimax["hermes"]["moa"]["presets"]["default"]["reference_max_tokens"] == 30000
-    assert mimo["hermes"]["moa"]["presets"]["default"]["reference_max_tokens"] == 30000
+    assert minimax["hermes"]["moa"]["presets"]["default"]["reference_max_tokens"] == 50000
+    assert mimo["hermes"]["moa"]["presets"]["default"]["reference_max_tokens"] == 50000
 
     minimax_reference = minimax["hermes"]["moa"]["presets"]["default"].pop("reference_models")
     mimo_reference = mimo["hermes"]["moa"]["presets"]["default"].pop("reference_models")

@@ -73,7 +73,7 @@ def test_configure_homes_minimizes_credentials(tmp_path: Path):
         yaml.safe_load((output / "moa/config.yaml").read_text())["moa"]["presets"]["default"][
             "reference_max_tokens"
         ]
-        == 30000
+        == 50000
     )
     disabled = yaml.safe_load((output / "base/config.yaml").read_text())["agent"][
         "disabled_toolsets"
@@ -83,9 +83,9 @@ def test_configure_homes_minimizes_credentials(tmp_path: Path):
 
 @pytest.mark.parametrize(
     ("cpu_count", "expected"),
-    [(None, 3), (0, 3), (-2, 3), (1, 3), (2, 6), (8, 24), (16, 32)],
+    [(None, 4), (0, 4), (-2, 4), (1, 4), (2, 8), (8, 32), (16, 32)],
 )
-def test_default_worker_count_is_three_per_cpu_capped_at_32(cpu_count, expected):
+def test_default_worker_count_is_four_per_cpu_capped_at_32(cpu_count, expected):
     assert resolve_worker_count(None, cpu_count=cpu_count) == expected
 
 

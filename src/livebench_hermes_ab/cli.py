@@ -32,7 +32,7 @@ from .core import (
 from .trace_validation import validate_moa_traces
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKERS_PER_CPU = 3
+WORKERS_PER_CPU = 4
 MAX_WORKERS = 32
 _CPU_COUNT_UNSET = object()
 
@@ -408,7 +408,7 @@ def arm_hermes_config(arm: dict[str, Any]) -> dict[str, Any]:
         cfg["moa"]["presets"]["default"] = {
             "enabled": True,
             "degraded_reference_policy": "loud",
-            "reference_max_tokens": 30000,
+            "reference_max_tokens": 50000,
             "max_tokens": 4096,
             "fanout": "every_n:3",
             "reference_models": arm["references"],

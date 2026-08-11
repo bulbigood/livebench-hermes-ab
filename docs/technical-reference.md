@@ -38,7 +38,7 @@ uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" ru
   --run-dir runs/example
 ```
 
-The default `streaming` mode submits the complete arm-cell matrix to a bounded worker pool. A free worker immediately starts the next cell; slow arms do not hold idle slots behind a pair barrier. Automatic concurrency is `min(CPU count × 3, 32)` and may be overridden with `--workers 1..32`.
+The default `streaming` mode submits the complete arm-cell matrix to a bounded worker pool. A free worker immediately starts the next cell; slow arms do not hold idle slots behind a pair barrier. Automatic concurrency is `min(CPU count × 4, 32)` and may be overridden with `--workers 1..32`.
 
 For synchronized timing, pass `--balanced-waves`. Each wave contains as many complete counterbalanced arm groups as fit in the worker budget, starts them behind an explicit barrier, and waits for the complete wave before continuing:
 
