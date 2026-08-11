@@ -128,6 +128,17 @@ uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" ru
 
 Do not edit `config.yaml` after `prepare`. The runner rejects config drift.
 
+The default scheduler is streaming: each free worker immediately starts the next isolated arm-cell. Automatic concurrency is `3 ×` the detected CPU count, capped at `32`; use `--workers N` to select any value from 1 through 32. Streaming timing is marked `*` because it is throughput evidence, not synchronized paired arm wall-time evidence.
+
+For comparable paired wall time, opt into complete-arm waves during both preflight and execution:
+
+```bash
+uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" prepare \
+  --balanced-waves --workers 12 --run-dir runs/timing
+uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" run \
+  --balanced-waves --workers 12 --run-dir runs/timing
+```
+
 ### 7. Score the completed run
 
 ```bash

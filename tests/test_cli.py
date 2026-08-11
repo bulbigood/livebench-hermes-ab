@@ -15,8 +15,12 @@ from livebench_hermes_ab.cli import (
     load_config,
     paired_arm_parallelism,
     parse_hermes_version,
+    prepare_cell_home,
     probe_hermes_compatibility,
     resolve_hermes_executable,
+    resolve_worker_count,
+    run,
+    schedule_cells,
     subprocess_environment,
     validate_hermes_arm_schema,
 )
@@ -75,6 +79,155 @@ def test_configure_homes_minimizes_credentials(tmp_path: Path):
         "disabled_toolsets"
     ]
     assert "terminal" in disabled and "web" in disabled and "memory" in disabled
+
+
+@pytest.mark.parametrize(
+    ("cpu_count", "expected"),
+    [(None, 3), (0, 3), (-2, 3), (1, 3), (2, 6), (8, 24), (16, 32)],
+)
+def test_default_worker_count_is_three_per_cpu_capped_at_32(cpu_count, expected):
+    assert resolve_worker_count(None, cpu_count=cpu_count) == expected
+
+
+@pytest.mark.parametrize("workers", [0, -1, 33, 1.5, "eight", True])
+def test_explicit_worker_count_is_fail_closed(workers):
+    with pytest.raises(ContractError, match="workers"):
+        resolve_worker_count(workers, cpu_count=2)
+
+
+@pytest.mark.parametrize("workers", [1, 8, 32])
+def test_explicit_worker_count_accepts_one_through_32(workers):
+    assert resolve_worker_count(workers, cpu_count=2) == workers
+
+
+def test_streaming_schedule_is_default_and_preserves_deterministic_coverage():
+    pairs = [{"pair_id": f"p{index}", "sample_index": index} for index in range(4)]
+    arms = ("base", "minimax", "mimo")
+
+    waves = schedule_cells(pairs, arms, scheduling="streaming", workers=8)
+
+    assert len(waves) == 1
+    assert {(cell["pair_id"], cell["arm_name"]) for cell in waves[0]} == {
+        (pair["pair_id"], arm) for pair in pairs for arm in arms
+    }
+    assert waves == schedule_cells(pairs, arms, scheduling="streaming", workers=8)
+
+
+def test_balanced_schedule_uses_complete_arm_groups_and_effective_multiple():
+    pairs = [{"pair_id": f"p{index}", "sample_index": index} for index in range(5)]
+    arms = ("base", "minimax", "mimo")
+
+    waves = schedule_cells(pairs, arms, scheduling="balanced_waves", workers=8)
+
+    assert [len(wave) for wave in waves] == [6, 6, 3]
+    for wave in waves:
+        pair_ids = {cell["pair_id"] for cell in wave}
+        for pair_id in pair_ids:
+            assert {cell["arm_name"] for cell in wave if cell["pair_id"] == pair_id} == set(arms)
+
+
+def test_balanced_schedule_rejects_fewer_workers_than_arms():
+    with pytest.raises(ContractError, match="at least the number of arms"):
+        schedule_cells(
+            [{"pair_id": "p0", "sample_index": 0}],
+            ("base", "minimax", "mimo"),
+            scheduling="balanced_waves",
+            workers=2,
+        )
+
+
+def test_cell_homes_are_isolated_from_template_and_each_other(tmp_path: Path):
+    template = tmp_path / "homes/base"
+    template.mkdir(parents=True)
+    (template / "config.yaml").write_text("model: {}\n")
+    (template / ".env").write_text("SAFE=value\n")
+    stale = template / "moa-traces"
+    stale.mkdir()
+    (stale / "probe.jsonl").write_text("stale\n")
+
+    first = prepare_cell_home(tmp_path, "base", "pair-1")
+    second = prepare_cell_home(tmp_path, "base", "pair-2")
+
+    assert first != second
+    assert (first / "config.yaml").read_text() == "model: {}\n"
+    assert not (first / "moa-traces").exists()
+    (first / "session.db").write_text("first")
+    assert not (second / "session.db").exists()
+    assert not (template / "session.db").exists()
+
+
+def test_streaming_run_uses_resolved_workers_and_unique_cell_homes(tmp_path: Path, monkeypatch):
+    arm_names = ("base", "minimax", "mimo")
+    pairs = [
+        {"pair_id": f"pair-{index}", "question_id": f"q{index}", "sample_index": 0}
+        for index in range(2)
+    ]
+    config = {
+        "arms": {
+            name: {
+                "hermes": {
+                    "model": {"provider": "test", "default": f"model-{name}"},
+                    "agent": {"reasoning_effort": "medium"},
+                    "moa": {"enabled": False},
+                }
+            }
+            for name in arm_names
+        },
+        "execution": {"scheduling": "streaming", "workers": 6},
+        "generation": {"timeout_seconds": 30},
+    }
+    run_dir = tmp_path / "run"
+    active = 0
+    peak = 0
+    homes = set()
+    barrier = threading.Barrier(6)
+    lock = threading.Lock()
+
+    def fake_prepare(*args, **kwargs):
+        for arm_name in arm_names:
+            home = run_dir / "homes" / arm_name
+            home.mkdir(parents=True)
+            (home / "config.yaml").write_text("moa: {enabled: false}\n")
+        (run_dir / "questions.json").write_text(
+            json.dumps([{"question_id": f"q{index}", "turns": ["prompt"]} for index in range(2)])
+        )
+        return {
+            "pairs": pairs,
+            "execution_contract": {
+                "scheduling": "streaming",
+                "requested_workers": 6,
+                "effective_workers": 6,
+                "timing_comparable": False,
+            },
+        }
+
+    def fake_invoke(arm_name, arm, home, question, timeout, *, executable):
+        nonlocal active, peak
+        with lock:
+            assert home not in homes
+            homes.add(home)
+            active += 1
+            peak = max(peak, active)
+        barrier.wait(timeout=1)
+        with lock:
+            active -= 1
+        return {"turns": [arm_name], "total_time_s": 0.01, "stdout_sha256": arm_name}
+
+    monkeypatch.setattr("livebench_hermes_ab.cli.load_config", lambda path: config)
+    monkeypatch.setattr(
+        "livebench_hermes_ab.cli.resolve_hermes_executable", lambda value: "/fake/hermes"
+    )
+    monkeypatch.setattr("livebench_hermes_ab.cli.prepare", fake_prepare)
+    monkeypatch.setattr("livebench_hermes_ab.cli.verify_run_integrity", lambda *args: None)
+    monkeypatch.setattr("livebench_hermes_ab.cli.invoke_arm", fake_invoke)
+
+    run(tmp_path / "config.yaml", tmp_path / "source", run_dir)
+
+    assert peak == 6
+    assert len(homes) == 6
+    for arm_name in arm_names:
+        rows = (run_dir / "raw" / f"hermes-{arm_name}.jsonl").read_text().splitlines()
+        assert len(rows) == 2
 
 
 def test_wave_invocation_runs_one_worker_per_arm_concurrently(tmp_path: Path):

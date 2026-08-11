@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -31,6 +32,9 @@ from .core import (
 from .trace_validation import validate_moa_traces
 
 ROOT = Path(__file__).resolve().parents[2]
+WORKERS_PER_CPU = 3
+MAX_WORKERS = 32
+_CPU_COUNT_UNSET = object()
 
 SUPPORTED_HERMES_PROFILES = {"0.19.1"}
 VALID_REASONING_EFFORTS = {
@@ -127,6 +131,76 @@ DISABLED_TOOLSETS = [
 ]
 
 
+def resolve_worker_count(value: Any = None, *, cpu_count: Any = _CPU_COUNT_UNSET) -> int:
+    if value is None or value == "auto":
+        detected = os.cpu_count() if cpu_count is _CPU_COUNT_UNSET else cpu_count
+        effective_cpus = detected if isinstance(detected, int) and detected > 0 else 1
+        return min(effective_cpus * WORKERS_PER_CPU, MAX_WORKERS)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ContractError(f"execution.workers must be an integer from 1 to {MAX_WORKERS}")
+    if not 1 <= value <= MAX_WORKERS:
+        raise ContractError(f"execution.workers must be from 1 to {MAX_WORKERS}")
+    return value
+
+
+def schedule_cells(
+    pairs: list[dict[str, Any]],
+    arm_names: tuple[str, ...],
+    *,
+    scheduling: str,
+    workers: int,
+) -> list[list[dict[str, Any]]]:
+    if scheduling not in {"streaming", "balanced_waves"}:
+        raise ContractError("execution.scheduling must be streaming or balanced_waves")
+    if not arm_names:
+        raise ContractError("execution requires at least one arm")
+    groups: list[list[dict[str, Any]]] = []
+    for index, pair in enumerate(pairs):
+        offset = index % len(arm_names)
+        rotated = arm_names[offset:] + arm_names[:offset]
+        groups.append([{**pair, "arm_name": arm_name} for arm_name in rotated])
+    if scheduling == "streaming":
+        return [[cell for group in groups for cell in group]]
+    if workers < len(arm_names):
+        raise ContractError("balanced_waves workers must be at least the number of arms")
+    groups_per_wave = max(1, workers // len(arm_names))
+    return [
+        [cell for group in groups[start : start + groups_per_wave] for cell in group]
+        for start in range(0, len(groups), groups_per_wave)
+    ]
+
+
+def resolve_execution(
+    config: dict[str, Any],
+    *,
+    scheduling_override: str | None = None,
+    workers_override: int | None = None,
+) -> dict[str, Any]:
+    execution = config.get("execution", {})
+    scheduling = scheduling_override or execution.get("scheduling")
+    if scheduling is None:
+        scheduling = (
+            "balanced_waves" if execution.get("parallelism") == "paired_arms" else "streaming"
+        )
+    workers = resolve_worker_count(
+        workers_override if workers_override is not None else execution.get("workers")
+    )
+    arm_count = len(config.get("arms", {}))
+    if scheduling == "balanced_waves" and workers < arm_count:
+        raise ContractError("balanced_waves workers must be at least the number of arms")
+    if scheduling not in {"streaming", "balanced_waves"}:
+        raise ContractError("execution.scheduling must be streaming or balanced_waves")
+    effective_workers = (
+        workers - (workers % arm_count) if scheduling == "balanced_waves" and arm_count else workers
+    )
+    return {
+        "scheduling": scheduling,
+        "requested_workers": workers,
+        "effective_workers": effective_workers,
+        "timing_comparable": scheduling == "balanced_waves",
+    }
+
+
 def load_config(path: Path) -> dict[str, Any]:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if "experiment" in raw:
@@ -152,8 +226,10 @@ def validate_generic_config(config: dict[str, Any]) -> None:
     arms = config.get("arms", {})
     if len(arms) < 2:
         raise ContractError("multi-arm experiments require at least two arms")
-    if config.get("execution", {}).get("workers_per_arm") != 1:
-        raise ContractError("execution.workers_per_arm must be exactly 1")
+    workers_per_arm = config.get("execution", {}).get("workers_per_arm")
+    if workers_per_arm not in (None, 1):
+        raise ContractError("legacy execution.workers_per_arm must be exactly 1")
+    resolve_execution(config)
     profile = config.get("compatibility", {}).get("hermes", {}).get("profile")
     if profile not in SUPPORTED_HERMES_PROFILES:
         supported = ", ".join(sorted(SUPPORTED_HERMES_PROFILES))
@@ -464,8 +540,16 @@ def prepare(
     source_home: Path,
     run_dir: Path,
     hermes_executable: str | None = None,
+    *,
+    scheduling_override: str | None = None,
+    workers_override: int | None = None,
 ) -> dict[str, Any]:
     config = load_config(config_path)
+    execution = resolve_execution(
+        config,
+        scheduling_override=scheduling_override,
+        workers_override=workers_override,
+    )
     resolved_hermes = hermes_executable or resolve_hermes_executable()
     actual_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -608,18 +692,19 @@ def prepare(
             },
         },
         "execution_contract": {
-            "concurrency": int(config["concurrency"]),
             "baseline_arm": config.get("execution", {}).get("baseline_arm", "base"),
-            "parallelism": config.get("execution", {}).get("parallelism", "sequential"),
-            "workers_per_arm": config.get("execution", {}).get(
-                "workers_per_arm", {"base": 1, "moa": 1}
-            ),
+            **execution,
             "retries": int(config.get("generation", {}).get("retries", 0)),
             "timeout_seconds": int(config.get("generation", {}).get("timeout_seconds", 900)),
             "order": (
-                "seeded task/sample order; all arms synchronized per cell"
-                if paired_arm_parallelism(config)
-                else "seeded shuffle of task/sample units; alternating arm-first order"
+                "seeded pair order; complete counterbalanced arm groups with wave barriers"
+                if execution["scheduling"] == "balanced_waves"
+                else "seeded pair order; counterbalanced arm submission without barriers"
+            ),
+            "timing_note": (
+                None
+                if execution["timing_comparable"]
+                else "* non-strict streaming timing is not paired arm wall-time evidence"
             ),
         },
         "arms": config["arms"],
@@ -888,15 +973,48 @@ def invoke_pair_parallel(
         return {arm_name: future.result() for arm_name, future in futures.items()}
 
 
+def prepare_cell_home(run_dir: Path, arm_name: str, pair_id: str) -> Path:
+    template = run_dir / "homes" / arm_name
+    cell_home = run_dir / "cell-homes" / arm_name / pair_id
+    if cell_home.exists():
+        raise ContractError(f"cell Hermes home already exists: {cell_home}")
+    cell_home.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    shutil.copytree(template, cell_home, symlinks=True)
+    trace_dir = cell_home / "moa-traces"
+    if trace_dir.exists():
+        shutil.rmtree(trace_dir)
+    return cell_home
+
+
+def collect_cell_traces(run_dir: Path, arm_name: str, pair_id: str, cell_home: Path) -> None:
+    source = cell_home / "moa-traces"
+    if not source.is_dir():
+        return
+    destination = run_dir / "homes" / arm_name / "moa-traces"
+    destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for index, path in enumerate(sorted(source.glob("*.jsonl"))):
+        shutil.copy2(path, destination / f"{pair_id}-{index}.jsonl")
+
+
 def run(
     config_path: Path,
     source_home: Path,
     run_dir: Path,
     hermes_executable: str | None = None,
+    *,
+    scheduling_override: str | None = None,
+    workers_override: int | None = None,
 ) -> None:
     config = load_config(config_path)
     resolved_hermes = resolve_hermes_executable(hermes_executable)
-    manifest = prepare(config_path, source_home, run_dir, resolved_hermes)
+    manifest = prepare(
+        config_path,
+        source_home,
+        run_dir,
+        resolved_hermes,
+        scheduling_override=scheduling_override,
+        workers_override=workers_override,
+    )
     questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
     by_id = {str(q["question_id"]): q for q in questions}
     raw_dir = run_dir / "raw"
@@ -906,55 +1024,89 @@ def run(
         raise ContractError(
             "run directory already contains answers; use a fresh run directory to preserve pairing"
         )
-    for pair in manifest["pairs"]:
-        question = by_id[pair["question_id"]]
+    execution = manifest["execution_contract"]
+    arm_names = tuple(config["arms"])
+    waves = schedule_cells(
+        manifest["pairs"],
+        arm_names,
+        scheduling=execution["scheduling"],
+        workers=execution["effective_workers"],
+    )
+    pair_position = {pair["pair_id"]: index for index, pair in enumerate(manifest["pairs"])}
+    records: dict[str, list[tuple[int, dict[str, Any]]]] = {arm: [] for arm in arm_names}
+    run_started = time.monotonic()
+
+    def execute_cell(cell: dict[str, Any], start_barrier: threading.Barrier | None):
         verify_run_integrity(config_path, run_dir, manifest)
-        if paired_arm_parallelism(config):
-            results = invoke_pair_parallel(
-                config["arms"],
-                {arm: run_dir / "homes" / arm for arm in config["arms"]},
-                question,
-                effective_timeout(config),
-                executable=resolved_hermes,
-            )
-        else:
-            results = {
-                arm_name: invoke_arm(
-                    arm_name,
-                    config["arms"][arm_name],
-                    run_dir / "homes" / arm_name,
-                    question,
-                    effective_timeout(config),
-                    executable=resolved_hermes,
-                )
-                for arm_name in pair["order"]
-            }
-        for arm_name in pair["order"]:
-            result = results[arm_name]
-            provider, model, reasoning = arm_identity(config["arms"][arm_name])
-            record = {
-                "question_id": question["question_id"],
-                "answer_id": sha256_bytes(f"{pair['pair_id']}:{arm_name}".encode())[:16],
-                "sample_index": pair["sample_index"],
-                "model_id": f"hermes-{arm_name}",
-                "choices": [{"index": 0, "turns": result["turns"]}],
-                "tstamp": time.time(),
-                "total_time_s": result["total_time_s"],
-                "total_output_tokens": None,
-                "total_input_tokens": None,
-                "total_cached_tokens": None,
-                "cost_usd": None,
-                "api_info": {
-                    "provider": provider,
-                    "api_name": model,
-                    "reasoning_effort": reasoning,
-                    "pair_id": pair["pair_id"],
-                    "sample_index": pair["sample_index"],
-                    "response_sha256": result["stdout_sha256"],
-                },
-            }
-            with (raw_dir / f"hermes-{arm_name}.jsonl").open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        arm_name = cell["arm_name"]
+        pair_id = cell["pair_id"]
+        question = by_id[cell["question_id"]]
+        try:
+            cell_home = prepare_cell_home(run_dir, arm_name, pair_id)
+            if start_barrier is not None:
+                start_barrier.wait(timeout=effective_timeout(config))
+        except (ContractError, OSError, RuntimeError, threading.BrokenBarrierError):
+            if start_barrier is not None:
+                start_barrier.abort()
+            raise
+        result = invoke_arm(
+            arm_name,
+            config["arms"][arm_name],
+            cell_home,
+            question,
+            effective_timeout(config),
+            executable=resolved_hermes,
+        )
+        collect_cell_traces(run_dir, arm_name, pair_id, cell_home)
+        provider, model, reasoning = arm_identity(config["arms"][arm_name])
+        record = {
+            "question_id": question["question_id"],
+            "answer_id": sha256_bytes(f"{pair_id}:{arm_name}".encode())[:16],
+            "sample_index": cell["sample_index"],
+            "model_id": f"hermes-{arm_name}",
+            "choices": [{"index": 0, "turns": result["turns"]}],
+            "tstamp": time.time(),
+            "total_time_s": result["total_time_s"],
+            "total_output_tokens": None,
+            "total_input_tokens": None,
+            "total_cached_tokens": None,
+            "cost_usd": None,
+            "api_info": {
+                "provider": provider,
+                "api_name": model,
+                "reasoning_effort": reasoning,
+                "pair_id": pair_id,
+                "sample_index": cell["sample_index"],
+                "response_sha256": result["stdout_sha256"],
+            },
+        }
+        return arm_name, pair_position[pair_id], record
+
+    for wave in waves:
+        start_barrier = (
+            threading.Barrier(len(wave)) if execution["scheduling"] == "balanced_waves" else None
+        )
+        with ThreadPoolExecutor(
+            max_workers=min(execution["effective_workers"], len(wave)),
+            thread_name_prefix="livebench-cell",
+        ) as executor:
+            futures = [executor.submit(execute_cell, cell, start_barrier) for cell in wave]
+            completed = [future.result() for future in futures]
+        for arm_name, position, record in completed:
+            records[arm_name].append((position, record))
+
+    for arm_name in arm_names:
+        payload = "".join(
+            json.dumps(record, ensure_ascii=False) + "\n"
+            for _, record in sorted(records[arm_name], key=lambda item: item[0])
+        )
+        (raw_dir / f"hermes-{arm_name}.jsonl").write_text(payload, encoding="utf-8")
+    manifest["execution_result"] = {
+        "run_makespan_seconds": round(time.monotonic() - run_started, 3),
+        "timing_comparable": execution["timing_comparable"],
+        "timing_note": execution.get("timing_note"),
+    }
+    (run_dir / "manifest.json").write_bytes(canonical_json(manifest) + b"\n")
     for arm_name, arm in config["arms"].items():
         if arm_reference_models(arm):
             validate_moa_traces(
@@ -1040,8 +1192,24 @@ def parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
     prep = sub.add_parser("prepare", help="No-cost validation and manifest creation")
     prep.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
+    prep.add_argument(
+        "--workers", type=int, help="Worker threads (1-32; default: 3 x CPUs, capped at 32)"
+    )
+    prep.add_argument(
+        "--balanced-waves",
+        action="store_true",
+        help="Use synchronized complete-arm waves for comparable wall-time evidence",
+    )
     execute = sub.add_parser("run", help="Execute paid paired model calls")
     execute.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
+    execute.add_argument(
+        "--workers", type=int, help="Worker threads (1-32; default: 3 x CPUs, capped at 32)"
+    )
+    execute.add_argument(
+        "--balanced-waves",
+        action="store_true",
+        help="Use synchronized complete-arm waves for comparable wall-time evidence",
+    )
 
     execute_arm = sub.add_parser("run-arm", help="Execute a frozen single treatment arm")
     execute_arm.add_argument("--arm", required=True)
@@ -1061,10 +1229,19 @@ def main() -> None:
                 args.source_hermes_home,
                 args.run_dir,
                 resolve_hermes_executable(args.hermes_executable),
+                scheduling_override="balanced_waves" if args.balanced_waves else None,
+                workers_override=args.workers,
             )
             print(json.dumps(manifest, indent=2, ensure_ascii=False))
         elif args.command == "run":
-            run(args.config, args.source_hermes_home, args.run_dir, args.hermes_executable)
+            run(
+                args.config,
+                args.source_hermes_home,
+                args.run_dir,
+                args.hermes_executable,
+                scheduling_override="balanced_waves" if args.balanced_waves else None,
+                workers_override=args.workers,
+            )
         elif args.command == "run-arm":
             run_single_arm(
                 args.config,

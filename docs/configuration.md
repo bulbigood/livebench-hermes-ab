@@ -105,12 +105,14 @@ When changing MoA reasoning effort, inspect both `agent.reasoning_effort` and th
 
 ```yaml
 execution:
-  parallelism: paired_arms
-  workers_per_arm: 1
+  scheduling: streaming
+  workers: auto
   baseline_arm: base
 ```
 
-`baseline_arm` must name one configured arm. `workers_per_arm` must remain `1`: cells within an arm are sequential. Adding an arm adds one worker for the current paired wave.
+`baseline_arm` must name one configured arm. `streaming` is the default: free workers immediately start the next isolated arm-cell without a wave barrier. `workers: auto` resolves to three times the detected CPU count, with a minimum effective CPU count of one and a hard maximum of 32 workers. Explicit values must be integers from 1 through 32.
+
+Use `--balanced-waves` when synchronized paired wall-time evidence is required. The runner rounds effective wave concurrency down to a complete multiple of the arm count and rejects a worker count smaller than the number of arms. Streaming reports mark arm timing with `*`; quality scores remain unmarked when coverage and provenance are valid.
 
 ## Shared scenarios
 

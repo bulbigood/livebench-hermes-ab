@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from livebench_hermes_ab.core import ContractError
-from livebench_hermes_ab.scoring import score_run, score_standard, summary_status
+from livebench_hermes_ab.scoring import score_run, score_standard, summary_status, timing_summary
 
 
 def test_cta_oracle_exact_match():
@@ -34,6 +34,44 @@ def test_summary_status_preserves_hermes_version_warning():
 def test_summary_status_is_plain_valid_for_verified_hermes():
     manifest = {"hermes_compatibility": {"status": "verified"}}
     assert summary_status(manifest, excluded=False) == "VALID"
+
+
+def test_streaming_timing_is_marked_but_quality_is_not():
+    manifest = {
+        "execution_contract": {
+            "scheduling": "streaming",
+            "effective_workers": 12,
+            "timing_comparable": False,
+            "timing_note": "* non-strict streaming timing is not paired arm wall-time evidence",
+        },
+        "execution_result": {"run_makespan_seconds": 9.0},
+    }
+    answers = {
+        "base": [{"total_time_s": 1.0}, {"total_time_s": 3.0}],
+        "moa": [{"total_time_s": 4.0}, {"total_time_s": 6.0}],
+    }
+
+    timing = timing_summary(manifest, answers)
+
+    assert timing["marker"] == "*"
+    assert timing["paired_wall_time_comparable"] is False
+    assert timing["run_makespan_seconds"] == 9.0
+    assert timing["arms"]["base"]["mean_cell_seconds"] == 2.0
+    assert timing["arms"]["base"]["sum_cell_seconds"] == 4.0
+
+
+def test_balanced_wave_timing_has_no_marker():
+    manifest = {
+        "execution_contract": {
+            "scheduling": "balanced_waves",
+            "effective_workers": 6,
+            "timing_comparable": True,
+            "timing_note": None,
+        }
+    }
+    timing = timing_summary(manifest, {"base": [{"total_time_s": 2.0}]})
+    assert timing["marker"] is None
+    assert timing["paired_wall_time_comparable"] is True
 
 
 def test_score_run_revalidates_persisted_moa_traces(tmp_path: Path):

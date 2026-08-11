@@ -701,7 +701,7 @@ wheels = [
 
 [[package]]
 name = "livebench-hermes-ab"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },

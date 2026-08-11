@@ -8,9 +8,11 @@ def test_default_moa_arms_differ_only_by_reference_model():
     root = Path(__file__).resolve().parents[1]
     config = yaml.safe_load((root / "config.yaml").read_text())
 
-    assert config["experiment"]["id"] == "livebench-hermes-targeted-moa-15x5-v3"
+    assert config["experiment"]["id"] == "livebench-hermes-targeted-moa-15x5-v4"
     assert list(config["arms"]) == ["base", "moa_minimax", "moa_mimo"]
     assert config["execution"]["baseline_arm"] == "base"
+    assert config["execution"]["scheduling"] == "streaming"
+    assert config["execution"]["workers"] == "auto"
 
     minimax = deepcopy(config["arms"]["moa_minimax"])
     mimo = deepcopy(config["arms"]["moa_mimo"])

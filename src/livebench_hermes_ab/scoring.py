@@ -22,6 +22,35 @@ def summary_status(manifest: dict[str, Any], excluded: bool) -> str:
     return "VALID"
 
 
+def timing_summary(
+    manifest: dict[str, Any],
+    answers_by_arm: dict[str, Any],
+) -> dict[str, Any]:
+    execution = manifest.get("execution_contract", {})
+    comparable = bool(execution.get("timing_comparable", False))
+    arms: dict[str, dict[str, float | int]] = {}
+    for arm_name, rows in answers_by_arm.items():
+        iterable = rows.values() if isinstance(rows, dict) else rows
+        values = [
+            float(row["total_time_s"]) for row in iterable if row.get("total_time_s") is not None
+        ]
+        if values:
+            arms[arm_name] = {
+                "samples": len(values),
+                "mean_cell_seconds": sum(values) / len(values),
+                "sum_cell_seconds": sum(values),
+            }
+    return {
+        "scheduling": execution.get("scheduling", "legacy"),
+        "effective_workers": execution.get("effective_workers"),
+        "paired_wall_time_comparable": comparable,
+        "marker": None if comparable else "*",
+        "note": execution.get("timing_note"),
+        "run_makespan_seconds": manifest.get("execution_result", {}).get("run_makespan_seconds"),
+        "arms": arms,
+    }
+
+
 def summary_compatibility(manifest: dict[str, Any]) -> dict[str, Any]:
     report = manifest.get("hermes_compatibility", {})
     return {
@@ -396,6 +425,7 @@ def score_multiarm_run(
             }
             for arm, categories in category_values.items()
         },
+        "timing": timing_summary(manifest, records),
         "scores_sha256": sha256_bytes(canonical_json(scores)),
     }
     (run_dir / "scores.json").write_bytes(canonical_json(scores) + b"\n")

@@ -38,26 +38,29 @@ uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" ru
   --run-dir runs/example
 ```
 
-The default `paired_arms` mode executes one cell across all arms concurrently, then waits at a barrier:
+The default `streaming` mode submits the complete arm-cell matrix to a bounded worker pool. A free worker immediately starts the next cell; slow arms do not hold idle slots behind a pair barrier. Automatic concurrency is `min(CPU count × 3, 32)` and may be overridden with `--workers 1..32`.
+
+For synchronized timing, pass `--balanced-waves`. Each wave contains as many complete counterbalanced arm groups as fit in the worker budget, starts them behind an explicit barrier, and waits for the complete wave before continuing:
 
 ```text
-cell 1: arm-a || arm-b || arm-c
-        -------- barrier --------
-cell 2: arm-a || arm-b || arm-c
+wave 1: cell 1 [arm-a || arm-b || arm-c]
+        cell 2 [arm-b || arm-c || arm-a]
+        --------------- barrier ---------------
+wave 2: cell 3 [arm-c || arm-a || arm-b]
 ```
 
 Properties:
 
-- maximum one active cell per arm;
-- up to one harness worker per arm for the current cell;
-- the next cell waits for the slowest arm;
+- streaming permits multiple active cells per arm in isolated homes;
+- balanced waves never split a complete arm group across waves;
+- arm order rotates deterministically between pairs;
 - thread identities need not persist between cells;
 - Hermes subprocesses perform model work; Python workers mostly wait;
 - MoA reference fanout may create additional provider-level concurrency inside one arm.
 
 Parallelism is an execution condition, not a model treatment. It may affect latency, throttling, or provider scheduling.
 
-Before each invocation, the runner verifies frozen config, selected questions, and generated Hermes config hashes. Non-empty answer files are rejected rather than overwritten. A failed arm fails the current cell and run.
+Before each invocation, the runner verifies frozen config, selected questions, and generated Hermes config hashes. Non-empty answer files are rejected rather than overwritten. A failed arm fails the run. Completed records are consolidated in manifest order rather than concurrent completion order.
 
 The absolute Hermes executable recorded during `prepare` is also used for every model call. This prevents probing one installation and accidentally executing another from `PATH`.
 
@@ -72,7 +75,7 @@ Do not combine independently generated diagnostic arms into a causal comparison 
 
 ## Isolation
 
-Arms do not share:
+Concurrent cells do not share writable Hermes homes. Each cell clones its arm's frozen template into `cell-homes/<arm>/<pair-id>/`; credentials remain allowlisted and local. Cells therefore do not share:
 
 - `HERMES_HOME`;
 - generated `config.yaml`;
@@ -81,7 +84,7 @@ Arms do not share:
 - MoA trace directories;
 - credential allowlists.
 
-The coordinator writes answer JSONL after joining a paired wave, so workers do not concurrently append to the same file.
+The coordinator writes answer JSONL only after collecting worker results, so workers do not concurrently append to the same file. Per-cell MoA traces are copied into the arm aggregate trace directory with pair-scoped names before validation.
 
 ## Output files
 
@@ -91,6 +94,7 @@ A completed run contains:
 runs/<run>/manifest.json
 runs/<run>/questions.json
 runs/<run>/homes/<arm>/config.yaml
+runs/<run>/cell-homes/<arm>/<pair-id>/
 runs/<run>/raw/hermes-<arm>.jsonl
 runs/<run>/scores.json
 runs/<run>/paired-deltas.json
@@ -171,7 +175,7 @@ It cannot freeze:
 - quotas and throttling;
 - pricing.
 
-Report wall-clock makespan separately from summed/per-cell latency. Do not report USD cost unless provider prices and complete token telemetry are available.
+`run_makespan_seconds` is the elapsed duration of the complete execution. `sum_cell_seconds` is a sum of overlapping subprocess durations and is not wall time. Streaming summaries mark arm timing with `*` and set `paired_wall_time_comparable: false`; the note states that non-strict scheduling is not paired arm wall-time evidence. Balanced-wave timing has no marker. Quality scores are not automatically invalidated by the timing marker when exact coverage and provenance remain valid. Do not report USD cost unless provider prices and complete token telemetry are available.
 
 ## Security boundaries
 
