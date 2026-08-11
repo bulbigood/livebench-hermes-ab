@@ -1,8 +1,12 @@
+import pytest
+
 from livebench_hermes_ab.core import (
+    ContractError,
     build_command,
     build_prompt,
     filter_livebench_snapshot,
     make_pairs,
+    validate_frozen_selection,
     validate_treatment_boundary,
 )
 
@@ -27,9 +31,7 @@ def config():
                     "model": "gpt-5.6-sol",
                     "reasoning_effort": "medium",
                 },
-                "references": [
-                    {"provider": "openrouter", "model": "minimax/minimax-m3"}
-                ],
+                "references": [{"provider": "openrouter", "model": "minimax/minimax-m3"}],
             },
         }
     }
@@ -102,3 +104,19 @@ def test_snapshot_filter_matches_livebench_removal_cutoff():
     ]
     got = filter_livebench_snapshot(rows, "2026-06-25", {"2024-06-24"})
     assert [q["question_id"] for q in got] == ["keep"]
+
+
+def test_frozen_selection_enforces_exact_category_counts():
+    selected = [
+        {"category": "reasoning"},
+        {"category": "reasoning"},
+        {"category": "data_analysis"},
+    ]
+    selection = {
+        "new_task_count": 3,
+        "category_task_counts": {"reasoning": 2, "data_analysis": 1},
+    }
+    validate_frozen_selection(selected, selection)
+    selection["category_task_counts"] = {"reasoning": 1, "data_analysis": 2}
+    with pytest.raises(ContractError, match="category task cardinality mismatch"):
+        validate_frozen_selection(selected, selection)

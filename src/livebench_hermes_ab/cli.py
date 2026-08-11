@@ -21,6 +21,7 @@ from .core import (
     make_pairs,
     select_stratified_complexity,
     sha256_bytes,
+    validate_frozen_selection,
     validate_treatment_boundary,
 )
 from .trace_validation import validate_moa_traces
@@ -190,11 +191,7 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
         if missing:
             raise ContractError(f"selected question IDs unavailable: {missing}")
         selected = [by_question_id[qid] for qid in requested_ids]
-        if len(selected) != int(selection["new_task_count"]):
-            raise ContractError("new_task_count does not match frozen question IDs")
-        math_count = sum(q.get("category") == "math" for q in selected)
-        if math_count != int(selection["math_task_count"]):
-            raise ContractError("math task cardinality mismatch")
+        validate_frozen_selection(selected, selection)
         samples_per_task = int(config["generation"]["samples_per_task"])
         selection_method = "frozen explicit question IDs; output-blind stratified shortlist"
     else:

@@ -98,6 +98,29 @@ def select_stratified_complexity(
     return chosen
 
 
+def validate_frozen_selection(selected: list[dict[str, Any]], selection: dict[str, Any]) -> None:
+    if len(selected) != int(selection["new_task_count"]):
+        raise ContractError("new_task_count does not match frozen question IDs")
+    expected_counts = selection.get("category_task_counts")
+    if expected_counts is not None:
+        actual_counts = {
+            category: sum(q.get("category") == category for q in selected)
+            for category in sorted({str(q.get("category")) for q in selected})
+        }
+        normalized_expected = {
+            str(category): int(count) for category, count in expected_counts.items()
+        }
+        if actual_counts != normalized_expected:
+            raise ContractError(
+                f"category task cardinality mismatch: expected {normalized_expected}, "
+                f"got {actual_counts}"
+            )
+    elif "math_task_count" in selection:
+        math_count = sum(q.get("category") == "math" for q in selected)
+        if math_count != int(selection["math_task_count"]):
+            raise ContractError("math task cardinality mismatch")
+
+
 def make_pairs(
     questions: list[dict[str, Any]], seed: int, samples_per_task: int = 1
 ) -> list[dict[str, Any]]:
