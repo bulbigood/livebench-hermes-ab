@@ -1,63 +1,88 @@
 # LiveBench Hermes multi-arm harness
 
-Reproducible, objective LiveBench comparisons for independently configured [Hermes Agent](https://hermes-agent.nousresearch.com/) arms.
+Compare multiple [Hermes Agent](https://hermes-agent.nousresearch.com/) configurations on exactly the same LiveBench scenarios.
 
-The default experiment compares a plain Hermes arm with a Mixture-of-Agents (MoA) arm on a frozen 15-task cohort:
+The default experiment compares:
 
-- 5 Instruction Following tasks;
-- 5 Reasoning tasks;
-- 5 Data Analysis tasks;
-- 5 stochastic samples per task;
-- 75 cells per arm.
+- `base`: plain Hermes using OpenAI Codex;
+- `moa`: the same aggregator plus an OpenRouter reference model.
 
-LiveBench is pinned as a Git submodule at commit `00eae856aa1c1a9e9d058a65a9a94d85884034c4`. Historical YAML contracts and reports remain in `config/` and `reports/`; `config.yaml` is the supported user-facing configuration.
+It runs 15 tasks × 5 samples = **75 cells per arm**. The default configuration expects **225 model calls in total**. Model calls may cost money.
 
-## Execution model
+> **Safe rule:** always run `prepare` first. It makes no model calls and prints the exact planned call count. Run `run` only after checking that output.
 
-Every configured arm gets:
+## Run the default benchmark
 
-- one sequential worker;
-- an isolated local `HERMES_HOME`;
-- its own `config.yaml`, `.env`, state, sessions, MoA traces, and answer JSONL.
+### 1. Install the required tools
 
-All arms for one `(question_id, sample_index)` run concurrently. The next cell starts only after every arm finishes. This keeps cells within an arm sequential while aligning competing arms in time. Adding a third arm creates a third worker; it does not add within-arm concurrency.
-
-Model calls can cost money. `prepare` is deterministic and makes no model calls. Always inspect its `expected_model_calls` output before `run`.
-
-## Requirements
+You need:
 
 - Linux or macOS;
+- Git;
 - Python 3.11+;
 - [`uv`](https://docs.astral.sh/uv/);
-- Git with submodule support;
-- Hermes Agent installed and ...[truncated]
+- Hermes Agent **0.19.1**.
 
-Verify the local tools:
+Install Hermes using the [official installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation/), then verify the version:
 
 ```bash
 hermes --version
-hermes config check
-uv --version
 ```
 
-Clone and install:
+The output must start with:
+
+```text
+Hermes Agent v0.19.1
+```
+
+A different version is rejected before any model calls. See [Hermes compatibility](docs/configuration.md#hermes-version-compatibility) if yours differs.
+
+### 2. Clone and install this project
 
 ```bash
-git clone --recurse-submodules <repository-url>
+git clone --recurse-submodules https://github.com/bulbigood/livebench-hermes-ab.git
 cd livebench-hermes-ab
-uv sync --extra test --extra livebench
+uv sync --extra livebench
 ```
 
-If the repository was cloned without submodules:
+If you already cloned without submodules:
 
 ```bash
 git submodule update --init --recursive
 ```
 
-Download the public LiveBench questions and NLTK resources:
+### 3. Configure the two default providers
+
+The default `base` arm uses your existing OpenAI Codex OAuth login:
+
+```bash
+hermes auth add openai-codex
+```
+
+The default `moa` arm also needs an OpenRouter API key:
+
+```bash
+export OPENROUTER_API_KEY='your-key-here'
+```
+
+Do **not** paste token values into `config.yaml`. The config contains only the allowed environment-variable name:
+
+```yaml
+credential_env:
+  - OPENROUTER_API_KEY
+```
+
+See [Credentials](docs/configuration.md#credentials) for `.env` usage and isolation details.
+
+### 4. Download the benchmark data
 
 ```bash
 PYTHONPATH=upstream uv run --extra livebench python upstream/livebench/download_questions.py
+```
+
+Download the local scoring resources:
+
+```bash
 NLTK_DATA="$HOME/.cache/nltk_data" uv run --extra livebench python - <<'PY'
 import nltk
 nltk.download("punkt")
@@ -65,64 +90,91 @@ nltk.download("punkt_tab")
 PY
 ```
 
-`data/` and `runs/` are ignored by Git.
+The downloaded `data/` directory is ignored by Git.
 
-## Configure Hermes arms
+### 5. Prepare the run — no model calls
 
-The root [`config.yaml`](config.yaml) has two layers.
+Use a new run directory:
 
-### Harness-owned sections
-
-- `experiment`: immutable experiment identity, upstream revision, release, seed, and question paths.
-- `selection`: one exact experiment-global scenario list shared by every arm.
-- `generation`: samples, retries, and per-Hermes-process timeout.
-- `execution`: baseline arm and concurrency policy.
-- `scoring`: local objective scorer declaration.
-- `arms.<name>.credential_env`: names of environment variables allowed in that arm.
-
-### Configure the shared scenarios
-
-Declare scenarios once under category-grouped YAML bullet lists:
-
-```yaml
-selection:
-  scenarios:
-    reasoning:
-      - id: "<LiveBench question_id>"
-        family: zebra_puzzle
-        source_url: "https://example.org/provenance"  # optional
-        note: "level 20"                              # optional
-    coding:
-      - id: "<LiveBench question_id>"
-        family: code_generation
-    data_analysis:
-      - id: "<LiveBench question_id>"
-        family: tablejoin
+```bash
+uv run livebench-hermes-ab --config config.yaml prepare \
+  --run-dir runs/default
 ```
 
-The section key is the expected LiveBench `category`. `family` is the expected LiveBench `task`. Both are checked against the local corpus pinned by `experiment.upstream_commit` and `experiment.release`; they are not decorative labels. Category names are not hard-coded, so `coding`, `math`, or another LiveBench category works when the selected IDs are present and active in that pinned corpus.
+This validates Hermes, providers, credentials, scenarios, generated arm configs, concurrency, and the pinned LiveBench revision. It then writes `runs/default/manifest.json`.
 
-`id` is the only executable selector. `source_url` and `note` are optional provenance metadata stored in the manifest; URLs are never fetched during `prepare`, execution, or scoring. This avoids turning an external website into an accidental benchmark dependency.
+Print the planned call count:
 
-The grouped list is resolved once before any arm runs. Duplicate IDs, unavailable or retired IDs, unsupported item keys, malformed URLs, and category/family mismatches fail `prepare`. Arm-local scenario overrides do not exist, so every arm receives the same frozen `(question_id, sample_index)` matrix.
+```bash
+uv run python - <<'PY'
+import json
+manifest = json.load(open("runs/default/manifest.json"))
+print(json.dumps(manifest["expected_model_calls"], indent=2))
+PY
+```
 
-The manifest preserves the configured scenario order under `selection.scenarios`, records derived category/family counts, and stores `selection.scenarios_sha256`. Pair execution order is separately shuffled from the experiment seed. Legacy immutable configs using a flat `selection.question_ids` list remain supported, but a config cannot define both forms.
+For the unchanged default config, the total should be `225`. Stop here if the arms, scenarios, or call count are not what you intended.
 
-### Hermes-owned section
+### 6. Run the benchmark — this makes model calls
 
-`arms.<name>.hermes` is an ordinary Hermes YAML configuration tree. The harness serializes this tree directly to:
+```bash
+uv run livebench-hermes-ab --config config.yaml run \
+  --run-dir runs/default
+```
+
+Do not edit `config.yaml` after `prepare`. The runner rejects config drift.
+
+### 7. Score the completed run
+
+```bash
+uv run livebench-hermes-ab --config config.yaml score \
+  --run-dir runs/default
+```
+
+The command prints the summary and writes:
 
 ```text
-runs/<run>/homes/<name>/config.yaml
+runs/default/summary.json
+runs/default/scores.json
+runs/default/paired-deltas.json
+runs/default/trace-audit.json
 ```
 
-It does not rename model, reasoning, MoA, or provider fields and does not apply hidden model overrides. Generated semantic YAML is tested against the source subtree for exact equality.
+To start over, use a different run directory such as `runs/default-2`. Existing answer files are intentionally not overwritten.
 
-Example plain arm:
+## Configure your own arms
+
+Start from a copy so the public example remains intact:
+
+```bash
+cp config.yaml my-experiment.yaml
+```
+
+### 1. Give the experiment a new ID
+
+```yaml
+experiment:
+  id: my-model-comparison-v1
+```
+
+### 2. Define the baseline
+
+Every other arm is compared with this arm:
+
+```yaml
+execution:
+  baseline_arm: control
+```
+
+### 3. Add complete arm blocks
+
+Each `arms.<name>.hermes` block is a complete Hermes config. Nothing is inherited from the baseline.
+
+A minimal plain arm looks like this:
 
 ```yaml
 arms:
-  base:
+  control:
     credential_env: []
     hermes:
       model:
@@ -136,220 +188,103 @@ arms:
         save_traces: false
 ```
 
-Example MoA arm:
+To add another plain arm, copy the whole block and change the arm name and Hermes settings:
 
 ```yaml
-  moa:
-    credential_env: [OPENROUTER_API_KEY]
+  candidate-high:
+    credential_env: []
     hermes:
       model:
-        provider: moa
-        default: default
+        provider: openai-codex
+        default: gpt-5.6-sol
+      agent:
+        reasoning_effort: high
+        disabled_toolsets: [web, browser, terminal, file, memory]
+      moa:
+        enabled: false
+        save_traces: false
+```
+
+For an API-key provider, list only the environment-variable name:
+
+```yaml
+  openrouter-candidate:
+    credential_env:
+      - OPENROUTER_API_KEY
+    hermes:
+      model:
+        provider: openrouter
+        default: vendor/model-name
       agent:
         reasoning_effort: medium
       moa:
-        enabled: true
-        default_preset: default
-        active_preset: default
-        save_traces: true
-        presets:
-          default:
-            enabled: true
-            degraded_reference_policy: loud
-            fanout: every_n:3
-            reference_models:
-              - provider: openrouter
-                model: minimax/minimax-m3
-            aggregator:
-              provider: openai-codex
-              model: gpt-5.6-sol
-              reasoning_effort: medium
+        enabled: false
+        save_traces: false
 ```
 
-Consult the current [Hermes configuration reference](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/) when changing keys.
+Then export the value before `prepare` and `run`:
 
-### Hermes version and schema compatibility
+```bash
+export OPENROUTER_API_KEY='your-key-here'
+```
 
-The public config selects a code-owned compatibility pro...[truncated]
-### Add another arm
+For MoA arms, reference models and aggregator settings live inside that arm's `hermes.moa` tree. Use the complete `moa` block in [`config.yaml`](config.yaml) as the template. See [Arm configuration](docs/configuration.md#arms) for the full contract.
 
-Copy any `arms.<name>` block and give it a unique alphanumeric, hyphenated, or underscored name. For example, duplicate `moa` as `moa-low`, then change only:
+### 4. Choose the shared scenarios
+
+Scenarios are configured once and used by **every** arm:
 
 ```yaml
-arms:
-  moa-low:
-    credential_env: [OPENROUTER_API_KEY]
-    hermes:
-      agent:
-        reasoning_effort: low
-      # Copy the complete moa tree and set its aggregator reasoning_effort to low.
+selection:
+  scenarios:
+    reasoning:
+      - id: "<LiveBench question_id>"
+        family: zebra_puzzle
+        note: "optional note"
+    data_analysis:
+      - id: "<LiveBench question_id>"
+        family: tablejoin
 ```
 
-The complete Hermes subtree is required; YAML inheritance or an implicit BASE merge is deliberately not provided. Explicit configs are repetitive, but reproducible repetition beats an invisible treatment.
+`id` selects the local pinned LiveBench record. The category and `family` are checked during `prepare`. Optional `source_url` and `note` fields are metadata only.
 
-Set `execution.baseline_arm` to the arm against which all other arms are reported. `execution.workers_per_arm` must remain `1`.
+See [Scenario selection](docs/configuration.md#shared-scenarios) for validation rules and how IDs are frozen in the manifest.
 
-## Credentials
-
-Never put credential values in `config.yaml`.
-
-The harness rejects non-empty inline credential fields such as `api_key`, `access_token`, `password`, `clie...[truncated]
-
-- OAuth-backed providers use the existing `auth.json` from `--source-hermes-home` (default: `~/.hermes`). Generated homes receive a symlink to that file.
-- API-key arms list only required variable names in `credential_env`.
-- Values are resolved from the process environment, the source Hermes `.env`, or `/etc/environment`.
-- Each generated arm `.env` contains only its allowlisted variables and has mode `0600`.
-- Hermes child processes have inherited key/token/secret/password variables removed before the arm-specific `.env` is loaded.
-- A missing allowlisted credential fails during `prepare`.
-
-Examples:
+### 5. Prepare before spending money
 
 ```bash
-export OPENROUTER_API_KEY='...'
-hermes auth add openai-codex
+uv run livebench-hermes-ab --config my-experiment.yaml prepare \
+  --run-dir runs/my-experiment
 ```
 
-A project-local `.env` is Git-ignored as a safety net but is not parsed implicitly. If you choose to use one, export it into the process environment before `prepare`/`run`:
+Check `expected_model_calls`, `selection`, and `hermes_compatibility` in the printed manifest. If they are correct:
 
 ```bash
-set -a
-. ./.env
-set +a
+uv run livebench-hermes-ab --config my-experiment.yaml run \
+  --run-dir runs/my-experiment
+
+uv run livebench-hermes-ab --config my-experiment.yaml score \
+  --run-dir runs/my-experiment
 ```
 
-The default BASE arm gets no API-key environment variables. Static LiveBench prompts do not need tools, so the default Hermes configs disable all bundled toolsets and execution uses `--ignore-rules`.
+## Common errors
 
-## Prepare and audit
+| Error | What to do |
+|---|---|
+| `requires Hermes 0.19.1` | Install the supported Hermes version or add and test a new compatibility profile. Do not merely change the YAML version string. |
+| `OPENROUTER_API_KEY is missing` | Export it in the same shell before `prepare` and `run`. |
+| `no LiveBench question.jsonl files found` | Run the download command from step 4. |
+| `selected scenario IDs unavailable` | Use IDs present in the pinned local LiveBench release. |
+| config or question drift | Delete the incomplete run directory or choose a new one, then run `prepare` again. |
+| answer file already contains data | Use a new run directory. The harness does not overwrite model output. |
 
-Use a fresh run directory:
+## Documentation
 
-```bash
-uv run livebench-hermes-ab --config config.yaml prepare \
-  --run-dir runs/targeted-15x5
-```
-
-Inspect at least:
-
-- `task_count`, `samples_per_task`, and `paired_units`;
-- `expected_model_calls.by_arm` and `expected_model_calls.total`;
-- `execution_contract`;
-- `home_config_sha256`;
-- `hermes_compatibility.version`, `profile`, and per-arm `effective` values;
-- `selection.scenarios`, `scenarios_sha256`, and derived category/family counts.
-
-The default config prepares 75 BASE calls, 75 MoA aggregator calls, and 75 reference calls: 225 model calls total and zero judge calls.
-
-Verify a generated Hermes home without making a model call:
-
-```bash
-HERMES_HOME="$PWD/runs/targeted-15x5/homes/base" hermes config get model.provider
-HERMES_HOME="$PWD/runs/targeted-15x5/homes/moa" hermes config get moa.active_preset
-```
-
-`prepare` runs all Hermes compatibility probes before any benchmark generation. It fails closed on an unsupported Hermes version, an unknown treatment-critical key, invalid types, effective provider/model/reasoning/MoA drift, a failed offline Hermes config load, upstream drift, unavailable question IDs, category/family cardinality changes, missing credentials, invalid arm names, or invalid worker counts.
-
-Successful evidence is recorded in `manifest.json` under `hermes_compatibility`, including the executable, version line, profile, per-arm effective settings, config-check result, prompt-size digest, and tool-schema count. These probes are offline and make no provider calls.
-
-## Run
-
-```bash
-uv run livebench-hermes-ab --config config.yaml run \
-  --run-dir runs/targeted-15x5
-```
-
-The runner rejects non-empty answer files. It verifies the frozen config, selected questions, and generated Hermes configs before every cell. A failed arm fails the cell and the run; completed data remains available for diagnosis but cannot be scored as complete unless an explicitly supported amendment applies.
-
-For diagnostics, one configured arm can be run sequentially:
-
-```bash
-uv run livebench-hermes-ab --config config.yaml run-arm \
-  --arm moa --run-dir runs/moa-diagnostic
-```
-
-Do not combine independently generated diagnostic arms into a causal comparison unless prompts, cells, reference bytes, and execution conditions match.
-
-## Score
-
-```bash
-uv run livebench-hermes-ab --config config.yaml score \
-  --run-dir runs/targeted-15x5
-```
-
-Scoring is local and deterministic. It uses the pinned LiveBench objective processors and no judge-model calls.
-
-Outputs include:
-
-```text
-runs/targeted-15x5/manifest.json
-runs/targeted-15x5/questions.json
-runs/targeted-15x5/raw/hermes-<arm>.jsonl
-runs/targeted-15x5/scores.json
-runs/targeted-15x5/paired-deltas.json
-runs/targeted-15x5/summary.json
-runs/targeted-15x5/trace-audit.json
-runs/targeted-15x5/trace-audit-<additional-moa-arm>.json
-```
-
-`summary.json` reports:
-
-- mean score for every arm;
-- absolute and relative delta against `baseline_arm`;
-- task-balanced mean delta;
-- wins, ties, and regressions on the common cell intersection;
-- category means for every arm.
-
-Relative improvement is `N/A` (`null` in JSON) when the baseline mean is zero.
-
-## MoA trace validation
-
-Every arm whose active Hermes MoA preset has reference models is validated independently. Validation requires:
-
-- one trace per completed benchmark cell;
-- the configured preset and reference cardinality;
-- exact reference provider/model identities;
-- non-empty reference outputs and positive output-token usage;
-- exact aggregator provider/model identity;
-- aggregator output hashes matching persisted answers.
-
-`degraded_reference_policy: loud` is recommended. A fallback without valid reference evidence is not silently accepted.
-
-## Reproducibility boundaries
-
-The manifest freezes source/config/question hashes and model-call scope. It cannot freeze external provider behavior, model revisions behind mutable names, network conditions, quotas, or pricing.
-
-Parallel execution is an execution condition, not a model treatment. Concurrent arms may change latency and throttling compared with historical sequential runs. Report wall-clock makespan separately from summed and per-cell latency.
-
-Do not report USD cost unless provider prices and complete token telemetry are available. Historical OpenAI Codex responses may not expose complete token accounting.
-
-## Development and verification
-
-```bash
-uv run pytest -q
-uv run ruff check src tests scripts
-uv build
-git diff --check
-gitleaks detect --source . --redact --no-banner
-```
-
-The Gitleaks command scans Git history. Install Gitleaks separately if it is not already available. Before publishing, also verify that `git ls-files` contains no `.env`, `auth.json`, session database, request dump, private key, or credentials file.
-
-A no-cost publication preflight is:
-
-```bash
-rm -rf runs/publication-preflight
-uv run livebench-hermes-ab --config config.yaml prepare \
-  --run-dir runs/publication-preflight
-```
-
-## Repository contents
-
-- `config.yaml`: supported multi-arm configuration.
-- `config/`: immutable historical experiment contracts.
-- `reports/`: historical evidence and targeted scenario-selection rationale.
-- `src/livebench_hermes_ab/`: runner, scoring, and trace validation.
-- `tests/`: deterministic contract tests.
-- `upstream/`: pinned LiveBench submodule.
+- [Configuration: arms, scenarios, credentials, compatibility](docs/configuration.md)
+- [Technical reference: execution, manifests, scoring, traces, reproducibility](docs/technical-reference.md)
+- [Default scenario-selection rationale](reports/targeted-moa-scenario-selection.md)
+- [Hermes Agent configuration reference](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/)
 
 ## License
 
-The harness code is released under the [MIT License](LICENSE). The pinned LiveBench submodule and downloaded benchmark data retain their own upstream licenses and terms.
+Harness code is released under the [MIT License](LICENSE). LiveBench and downloaded benchmark data retain their upstream licenses and terms.
