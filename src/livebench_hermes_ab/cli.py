@@ -81,7 +81,7 @@ def load_config(path: Path) -> dict[str, Any]:
 def validate_generic_config(config: dict[str, Any]) -> None:
     arms = config.get("arms", {})
     if len(arms) < 2:
-        raise ContractError("TOML experiments require at least two arms")
+        raise ContractError("multi-arm experiments require at least two arms")
     if config.get("execution", {}).get("workers_per_arm") != 1:
         raise ContractError("execution.workers_per_arm must be exactly 1")
     for name, arm in arms.items():
