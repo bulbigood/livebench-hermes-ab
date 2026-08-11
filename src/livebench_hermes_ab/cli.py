@@ -221,13 +221,25 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
         "task_count": len(selected),
         "samples_per_task": samples_per_task,
         "paired_units": len(selected_pairs),
-        "expected_cells": len(selected_pairs) * 2,
+        "expected_cells": len(selected_pairs) * len(config.get("execution_arms", ["base", "moa"])),
         "expected_model_calls": {
-            "base_main": len(selected_pairs),
-            "moa_aggregator": len(selected_pairs),
-            "moa_references": len(selected_pairs) * len(config["arms"]["moa"]["references"]),
+            "base_main": len(selected_pairs)
+            if "base" in config.get("execution_arms", ["base", "moa"])
+            else 0,
+            "moa_aggregator": len(selected_pairs)
+            if "moa" in config.get("execution_arms", ["base", "moa"])
+            else 0,
+            "moa_references": (
+                len(selected_pairs) * len(config["arms"]["moa"]["references"])
+                if "moa" in config.get("execution_arms", ["base", "moa"])
+                else 0
+            ),
             "judge": 0,
-            "total": len(selected_pairs) * (2 + len(config["arms"]["moa"]["references"])),
+            "total": len(selected_pairs)
+            * sum(
+                1 if arm == "base" else 1 + len(config["arms"]["moa"]["references"])
+                for arm in config.get("execution_arms", ["base", "moa"])
+            ),
         },
         "pairs": selected_pairs,
         "questions_sha256": sha256_bytes(canonical_json(sanitized_questions)),
@@ -354,6 +366,55 @@ def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
     validate_moa_traces(run_dir, expected_count=len(manifest["pairs"]))
 
 
+def run_single_arm(config_path: Path, source_home: Path, run_dir: Path, arm_name: str) -> None:
+    config = load_config(config_path)
+    execution_arms = config.get("execution_arms")
+    if execution_arms != [arm_name] or arm_name != "moa":
+        raise ContractError("single-arm execution must be frozen as execution_arms: [moa]")
+    manifest = prepare(config_path, source_home, run_dir)
+    questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
+    by_id = {str(q["question_id"]): q for q in questions}
+    raw_dir = run_dir / "raw"
+    raw_dir.mkdir(exist_ok=True, mode=0o700)
+    answer_path = raw_dir / "hermes-moa.jsonl"
+    if answer_path.exists() and answer_path.stat().st_size:
+        raise ContractError("run directory already contains MoA answers")
+    for pair in manifest["pairs"]:
+        verify_run_integrity(config_path, run_dir, manifest)
+        question = by_id[pair["question_id"]]
+        result = invoke_arm(
+            "moa",
+            config["arms"]["moa"],
+            run_dir / "homes" / "moa",
+            question,
+            effective_timeout(config),
+        )
+        record = {
+            "question_id": question["question_id"],
+            "answer_id": sha256_bytes(f"{pair['pair_id']}:moa".encode())[:16],
+            "sample_index": pair["sample_index"],
+            "model_id": "hermes-moa-low",
+            "choices": [{"index": 0, "turns": result["turns"]}],
+            "tstamp": time.time(),
+            "total_time_s": result["total_time_s"],
+            "total_output_tokens": None,
+            "total_input_tokens": None,
+            "total_cached_tokens": None,
+            "cost_usd": None,
+            "api_info": {
+                "provider": "moa",
+                "api_name": config["arms"]["moa"]["model"],
+                "reasoning_effort": config["arms"]["moa"]["reasoning_effort"],
+                "pair_id": pair["pair_id"],
+                "sample_index": pair["sample_index"],
+                "response_sha256": result["stdout_sha256"],
+            },
+        }
+        with answer_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    validate_moa_traces(run_dir, expected_count=len(manifest["pairs"]))
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Paired Hermes BASE/MoA runner for LiveBench")
     p.add_argument("--config", type=Path, default=ROOT / "config/experiment.yaml")
@@ -363,6 +424,10 @@ def parser() -> argparse.ArgumentParser:
     prep.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
     execute = sub.add_parser("run", help="Execute paid paired model calls")
     execute.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
+
+    execute_arm = sub.add_parser("run-arm", help="Execute a frozen single treatment arm")
+    execute_arm.add_argument("--arm", choices=["moa"], required=True)
+    execute_arm.add_argument("--run-dir", type=Path, required=True)
 
     score = sub.add_parser("score", help="Run pinned deterministic LiveBench scorers")
     score.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
@@ -377,6 +442,8 @@ def main() -> None:
             print(json.dumps(manifest, indent=2, ensure_ascii=False))
         elif args.command == "run":
             run(args.config, args.source_hermes_home, args.run_dir)
+        elif args.command == "run-arm":
+            run_single_arm(args.config, args.source_hermes_home, args.run_dir, args.arm)
         else:
             from .scoring import score_run
 
