@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 from pathlib import Path
@@ -12,7 +13,10 @@ from livebench_hermes_ab.cli import (
     invoke_pair_parallel,
     load_config,
     paired_arm_parallelism,
+    parse_hermes_version,
+    probe_hermes_compatibility,
     subprocess_environment,
+    validate_hermes_arm_schema,
 )
 from livebench_hermes_ab.core import ContractError
 
@@ -118,12 +122,15 @@ experiment:
   question_globs: [data/*.jsonl]
 generation: {samples_per_task: 1, timeout_seconds: 30}
 execution: {parallelism: paired_arms, workers_per_arm: 1}
+compatibility:
+  hermes: {profile: '0.19.1'}
 arms:
   control:
     credential_env: []
     hermes:
       model: {provider: openai-codex, default: gpt-5.6-sol}
       agent: {reasoning_effort: low, disabled_toolsets: [terminal]}
+      moa: {enabled: false, save_traces: false}
   treatment:
     credential_env: [OPENROUTER_API_KEY]
     hermes:
@@ -176,3 +183,193 @@ def test_subprocess_environment_does_not_inherit_parent_secrets(tmp_path: Path, 
     assert "GH_TOKEN" not in env
     assert env["ORDINARY_SETTING"] == "kept"
     assert env["HERMES_HOME"] == str(tmp_path / "arm-home")
+
+
+def test_parse_hermes_version_from_real_cli_shape():
+    assert (
+        parse_hermes_version(
+            "Hermes Agent v0.19.1 (2026.7.30) · upstream 863e3131 · local fed098bb\n"
+        )
+        == "0.19.1"
+    )
+
+
+def test_hermes_schema_rejects_unknown_treatment_key():
+    arm = {
+        "hermes": {
+            "model": {
+                "provider": "openai-codex",
+                "default": "gpt-5.6-sol",
+                "reasoning_efford": "medium",
+            },
+            "agent": {"reasoning_effort": "medium"},
+            "moa": {"enabled": False, "save_traces": False},
+        }
+    }
+    with pytest.raises(ContractError, match="arm control.*model.*reasoning_efford"):
+        validate_hermes_arm_schema("control", arm, "0.19.1")
+
+
+def test_hermes_schema_rejects_invalid_reasoning_type():
+    arm = {
+        "hermes": {
+            "model": {"provider": "openai-codex", "default": "gpt-5.6-sol"},
+            "agent": {"reasoning_effort": ["medium"]},
+            "moa": {"enabled": False, "save_traces": False},
+        }
+    }
+    with pytest.raises(ContractError, match="arm control.*reasoning_effort"):
+        validate_hermes_arm_schema("control", arm, "0.19.1")
+
+
+def test_hermes_schema_rejects_inline_credential_without_echoing_value():
+    leaked_value = "fixture-openrouter-value-must-not-appear"
+    arm = {
+        "hermes": {
+            "model": {
+                "provider": "openrouter",
+                "default": "example/model",
+                "api_key": leaked_value,
+            },
+            "agent": {"reasoning_effort": "medium"},
+            "moa": {"enabled": False, "save_traces": False},
+        }
+    }
+    with pytest.raises(ContractError) as caught:
+        validate_hermes_arm_schema("control", arm, "0.19.1")
+    message = str(caught.value)
+    assert "inline credential" in message
+    assert "model.api_key" in message
+    assert leaked_value not in message
+
+
+def test_hermes_probe_fails_closed_on_version_mismatch(tmp_path: Path):
+    config = {
+        "compatibility": {"hermes": {"profile": "0.19.1"}},
+        "arms": {
+            "control": {
+                "hermes": {
+                    "model": {"provider": "openai-codex", "default": "gpt-5.6-sol"},
+                    "agent": {"reasoning_effort": "medium"},
+                    "moa": {"enabled": False, "save_traces": False},
+                }
+            }
+        },
+    }
+
+    def fake_run(command, **kwargs):
+        assert command == ["/fake/hermes", "--version"]
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": "Hermes Agent v0.20.0 (test)\n", "stderr": ""},
+        )()
+
+    with pytest.raises(ContractError, match="requires Hermes 0.19.1.*installed 0.20.0"):
+        probe_hermes_compatibility(
+            config,
+            {"control": tmp_path / "control"},
+            executable="/fake/hermes",
+            runner=fake_run,
+        )
+
+
+def test_hermes_probe_reports_arm_config_failure(tmp_path: Path):
+    home = tmp_path / "control"
+    home.mkdir()
+    config_path = home / "config.yaml"
+    config_path.write_text("model: {}\n")
+    config = {
+        "compatibility": {"hermes": {"profile": "0.19.1"}},
+        "arms": {
+            "control": {
+                "hermes": {
+                    "model": {"provider": "openai-codex", "default": "gpt-5.6-sol"},
+                    "agent": {"reasoning_effort": "medium"},
+                    "moa": {"enabled": False, "save_traces": False},
+                }
+            }
+        },
+    }
+
+    def fake_run(command, **kwargs):
+        if command[-1] == "--version":
+            return type(
+                "Result",
+                (),
+                {"returncode": 0, "stdout": "Hermes Agent v0.19.1 (test)\n", "stderr": ""},
+            )()
+        return type(
+            "Result",
+            (),
+            {"returncode": 2, "stdout": "", "stderr": "unsupported model.default"},
+        )()
+
+    with pytest.raises(ContractError) as caught:
+        probe_hermes_compatibility(
+            config,
+            {"control": home},
+            executable="/fake/hermes",
+            runner=fake_run,
+        )
+    message = str(caught.value)
+    assert "arm 'control'" in message
+    assert "Hermes version: 0.19.1" in message
+    assert str(config_path) in message
+    assert "unsupported model.default" in message
+
+
+def test_hermes_probe_records_offline_evidence_for_each_arm(tmp_path: Path):
+    arms = {
+        name: {
+            "hermes": {
+                "model": {"provider": "openai-codex", "default": f"model-{name}"},
+                "agent": {"reasoning_effort": "medium", "disabled_toolsets": ["terminal"]},
+                "moa": {"enabled": False, "save_traces": False},
+            }
+        }
+        for name in ("control", "candidate")
+    }
+    homes = {}
+    for name, arm in arms.items():
+        home = tmp_path / name
+        home.mkdir()
+        (home / "config.yaml").write_text(yaml.safe_dump(arm["hermes"]))
+        homes[name] = home
+    config = {
+        "compatibility": {"hermes": {"profile": "0.19.1"}},
+        "arms": arms,
+    }
+
+    def fake_run(command, **kwargs):
+        if command[-1] == "--version":
+            stdout = "Hermes Agent v0.19.1 (test)\n"
+        elif command[-2:] == ["config", "check"]:
+            stdout = "Configuration OK\n"
+        elif command[1:3] == ["config", "get"]:
+            key = command[3]
+            home_name = Path(kwargs["env"]["HERMES_HOME"]).name
+            values = {
+                "model.provider": "openai-codex",
+                "model.default": f"model-{home_name}",
+                "agent.reasoning_effort": "medium",
+                "moa.enabled": False,
+            }
+            stdout = json.dumps(values[key]) + "\n"
+        elif command[-2:] == ["prompt-size", "--json"]:
+            stdout = '{"tool_schemas": {"count": 0}, "total_tokens": 123}\n'
+        else:
+            raise AssertionError(command)
+        return type("Result", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
+
+    report = probe_hermes_compatibility(
+        config,
+        homes,
+        executable="/fake/hermes",
+        runner=fake_run,
+    )
+    assert report["version"] == "0.19.1"
+    assert report["profile"] == "0.19.1"
+    assert set(report["arms"]) == {"control", "candidate"}
+    assert report["arms"]["control"]["config_check"] == "passed"
+    assert report["arms"]["candidate"]["effective"]["model.default"] == "model-candidate"

@@ -30,7 +30,7 @@ Model calls can cost money. `prepare` is deterministic and makes no model calls.
 - Python 3.11+;
 - [`uv`](https://docs.astral.sh/uv/);
 - Git with submodule support;
-- Hermes Agent installed and configured. This repository is tested with Hermes Agent `0.19.1`.
+- Hermes Agent installed and ...[truncated]
 
 Verify the local tools:
 
@@ -138,8 +138,11 @@ Example MoA arm:
               reasoning_effort: medium
 ```
 
-Consult the current [Hermes configuration reference](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/) when adding keys. Support depends on the installed Hermes version.
+Consult the current [Hermes configuration reference](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/) when changing keys.
 
+### Hermes version and schema compatibility
+
+The public config selects a code-owned compatibility pro...[truncated]
 ### Add another arm
 
 Copy any `arms.<name>` block and give it a unique alphanumeric, hyphenated, or underscored name. For example, duplicate `moa` as `moa-low`, then change only:
@@ -162,6 +165,8 @@ Set `execution.baseline_arm` to the arm against which all other arms are reporte
 
 Never put credential values in `config.yaml`.
 
+The harness rejects non-empty inline credential fields such as `api_key`, `access_token`, `password`, `clie...[truncated]
+
 - OAuth-backed providers use the existing `auth.json` from `--source-hermes-home` (default: `~/.hermes`). Generated homes receive a symlink to that file.
 - API-key arms list only required variable names in `credential_env`.
 - Values are resolved from the process environment, the source Hermes `.env`, or `/etc/environment`.
@@ -174,6 +179,14 @@ Examples:
 ```bash
 export OPENROUTER_API_KEY='...'
 hermes auth add openai-codex
+```
+
+A project-local `.env` is Git-ignored as a safety net but is not parsed implicitly. If you choose to use one, export it into the process environment before `prepare`/`run`:
+
+```bash
+set -a
+. ./.env
+set +a
 ```
 
 The default BASE arm gets no API-key environment variables. Static LiveBench prompts do not need tools, so the default Hermes configs disable all bundled toolsets and execution uses `--ignore-rules`.
@@ -193,6 +206,7 @@ Inspect at least:
 - `expected_model_calls.by_arm` and `expected_model_calls.total`;
 - `execution_contract`;
 - `home_config_sha256`;
+- `hermes_compatibility.version`, `profile`, and per-arm `effective` values;
 - `selection.question_ids` and category counts.
 
 The default config prepares 75 BASE calls, 75 MoA aggregator calls, and 75 reference calls: 225 model calls total and zero judge calls.
@@ -204,7 +218,9 @@ HERMES_HOME="$PWD/runs/targeted-15x5/homes/base" hermes config get model.provide
 HERMES_HOME="$PWD/runs/targeted-15x5/homes/moa" hermes config get moa.active_preset
 ```
 
-`prepare` fails closed on upstream drift, unavailable question IDs, category/family cardinality changes, missing credentials, invalid arm names, or invalid worker counts.
+`prepare` runs all Hermes compatibility probes before any benchmark generation. It fails closed on an unsupported Hermes version, an unknown treatment-critical key, invalid types, effective provider/model/reasoning/MoA drift, a failed offline Hermes config load, upstream drift, unavailable question IDs, category/family cardinality changes, missing credentials, invalid arm names, or invalid worker counts.
+
+Successful evidence is recorded in `manifest.json` under `hermes_compatibility`, including the executable, version line, profile, per-arm effective settings, config-check result, prompt-size digest, and tool-schema count. These probes are offline and make no provider calls.
 
 ## Run
 
@@ -284,7 +300,10 @@ uv run pytest -q
 uv run ruff check src tests scripts
 uv build
 git diff --check
+gitleaks detect --source . --redact --no-banner
 ```
+
+The Gitleaks command scans Git history. Install Gitleaks separately if it is not already available. Before publishing, also verify that `git ls-files` contains no `.env`, `auth.json`, session database, request dump, private key, or credentials file.
 
 A no-cost publication preflight is:
 

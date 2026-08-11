@@ -9,3 +9,18 @@ dist/
 build/
 *.egg-info/
 .coverage
+
+# Credentials and mutable Hermes state must never enter Git.
+.env
+.env.*
+!.env.example
+auth.json
+**/auth.json
+*.pem
+*.p12
+*.pfx
+*.key
+state.db
+**/state.db
+sessions/
+logs/

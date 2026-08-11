@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -28,6 +30,72 @@ from .core import (
 from .trace_validation import validate_moa_traces
 
 ROOT = Path(__file__).resolve().parents[2]
+
+SUPPORTED_HERMES_PROFILES = {"0.19.1"}
+VALID_REASONING_EFFORTS = {
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+}
+MODEL_KEYS_0_19_1 = {
+    "default",
+    "provider",
+    "base_url",
+    "api_key",
+    "context_length",
+    "aliases",
+}
+AGENT_KEYS_0_19_1 = {
+    "reasoning_effort",
+    "reasoning_overrides",
+    "disabled_toolsets",
+    "max_turns",
+    "completion_reserve_turns",
+    "api_max_retries",
+    "service_tier",
+    "tool_use_enforcement",
+    "intent_ack_continuation",
+    "task_completion_guidance",
+    "parallel_tool_call_guidance",
+    "environment_probe",
+    "environment_hint",
+    "coding_context",
+    "coding_instructions",
+    "verify_guidance",
+    "max_verify_nudges",
+    "verify_on_stop",
+}
+MOA_KEYS_0_19_1 = {
+    "enabled",
+    "default_preset",
+    "active_preset",
+    "save_traces",
+    "trace_dir",
+    "privacy_filter",
+    "presets",
+}
+MOA_PRESET_KEYS_0_19_1 = {
+    "enabled",
+    "degraded_reference_policy",
+    "reference_max_tokens",
+    "max_tokens",
+    "fanout",
+    "reference_models",
+    "aggregator",
+}
+MOA_MODEL_SLOT_KEYS_0_19_1 = {
+    "provider",
+    "model",
+    "reasoning_effort",
+    "base_url",
+    "api_key",
+    "extra_body",
+}
 
 DISABLED_TOOLSETS = [
     "web",
@@ -68,6 +136,7 @@ def load_config(path: Path) -> dict[str, Any]:
             "selection": raw.get("selection", {}),
             "generation": raw.get("generation", {}),
             "execution": raw.get("execution", {}),
+            "compatibility": raw.get("compatibility", {}),
             "arms": raw.get("arms", {}),
         }
         config["concurrency"] = len(config["arms"])
@@ -84,18 +153,159 @@ def validate_generic_config(config: dict[str, Any]) -> None:
         raise ContractError("multi-arm experiments require at least two arms")
     if config.get("execution", {}).get("workers_per_arm") != 1:
         raise ContractError("execution.workers_per_arm must be exactly 1")
+    profile = config.get("compatibility", {}).get("hermes", {}).get("profile")
+    if profile not in SUPPORTED_HERMES_PROFILES:
+        supported = ", ".join(sorted(SUPPORTED_HERMES_PROFILES))
+        raise ContractError(
+            f"compatibility.hermes.profile must name a supported profile: {supported}"
+        )
     for name, arm in arms.items():
         if not name.replace("-", "").replace("_", "").isalnum():
             raise ContractError(f"unsafe arm name: {name}")
         hermes = arm.get("hermes")
         if not isinstance(hermes, dict):
             raise ContractError(f"arm {name} requires a hermes table")
-        arm_identity(arm)
+        validate_hermes_arm_schema(name, arm, str(profile))
         credentials = arm.get("credential_env", [])
         if not isinstance(credentials, list) or not all(
             isinstance(key, str) for key in credentials
         ):
             raise ContractError(f"arm {name} credential_env must be a list of names")
+
+
+def _unknown_keys(value: Any, allowed: set[str]) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    return sorted(str(key) for key in value if key not in allowed)
+
+
+def _require_mapping(arm_name: str, path: str, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ContractError(f"arm {arm_name} Hermes {path} must be a mapping")
+    return value
+
+
+def _require_nonempty_string(arm_name: str, path: str, value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ContractError(f"arm {arm_name} Hermes {path} must be a non-empty string")
+    return value.strip()
+
+
+def _validate_reasoning(arm_name: str, path: str, value: Any) -> None:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ContractError(f"arm {arm_name} Hermes {path} must be a reasoning string")
+    if value.strip().lower() not in VALID_REASONING_EFFORTS:
+        allowed = ", ".join(sorted(VALID_REASONING_EFFORTS))
+        raise ContractError(f"arm {arm_name} Hermes {path} must be one of: {allowed}")
+
+
+def _reject_unknown(arm_name: str, path: str, value: Any, allowed: set[str]) -> None:
+    unknown = _unknown_keys(value, allowed)
+    if unknown:
+        raise ContractError(f"arm {arm_name} Hermes {path} has unsupported keys: {unknown}")
+
+
+def _reject_inline_credentials(arm_name: str, value: Any, path: str = "config") -> None:
+    sensitive_names = {
+        "api_key",
+        "api_token",
+        "access_token",
+        "refresh_token",
+        "auth_token",
+        "password",
+        "secret",
+        "client_secret",
+        "private_key",
+        "credential",
+        "credentials",
+    }
+    if isinstance(value, dict):
+        for raw_key, child in value.items():
+            key = str(raw_key)
+            child_path = f"{path}.{key}"
+            normalized = key.strip().lower().replace("-", "_")
+            if normalized in sensitive_names and child not in (None, "", False, [], {}):
+                raise ContractError(
+                    f"arm {arm_name} Hermes {child_path} contains an inline credential; "
+                    "pass only its environment-variable name through credential_env"
+                )
+            _reject_inline_credentials(arm_name, child, child_path)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _reject_inline_credentials(arm_name, child, f"{path}[{index}]")
+
+
+def validate_hermes_arm_schema(arm_name: str, arm: dict[str, Any], profile: str) -> None:
+    if profile != "0.19.1":
+        raise ContractError(f"unsupported Hermes compatibility profile: {profile}")
+    hermes = _require_mapping(arm_name, "config", arm.get("hermes"))
+    _reject_inline_credentials(arm_name, hermes)
+    model = _require_mapping(arm_name, "model", hermes.get("model"))
+    agent = _require_mapping(arm_name, "agent", hermes.get("agent"))
+    moa = _require_mapping(arm_name, "moa", hermes.get("moa"))
+    _reject_unknown(arm_name, "model", model, MODEL_KEYS_0_19_1)
+    _reject_unknown(arm_name, "agent", agent, AGENT_KEYS_0_19_1)
+    _reject_unknown(arm_name, "moa", moa, MOA_KEYS_0_19_1)
+
+    provider = _require_nonempty_string(arm_name, "model.provider", model.get("provider"))
+    _require_nonempty_string(arm_name, "model.default", model.get("default"))
+    _validate_reasoning(arm_name, "agent.reasoning_effort", agent.get("reasoning_effort"))
+    disabled = agent.get("disabled_toolsets", [])
+    if not isinstance(disabled, list) or not all(isinstance(item, str) for item in disabled):
+        raise ContractError(f"arm {arm_name} Hermes agent.disabled_toolsets must be strings")
+
+    enabled = moa.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ContractError(f"arm {arm_name} Hermes moa.enabled must be boolean")
+    save_traces = moa.get("save_traces")
+    if not isinstance(save_traces, bool):
+        raise ContractError(f"arm {arm_name} Hermes moa.save_traces must be boolean")
+    if not enabled:
+        if provider == "moa":
+            raise ContractError(f"arm {arm_name} uses provider moa but Hermes moa.enabled is false")
+        return
+    if provider != "moa":
+        raise ContractError(f"arm {arm_name} enables MoA but model.provider is not moa")
+    if not save_traces:
+        raise ContractError(f"arm {arm_name} MoA requires moa.save_traces: true for auditability")
+
+    active = _require_nonempty_string(
+        arm_name, "moa.active_preset", moa.get("active_preset") or moa.get("default_preset")
+    )
+    presets = _require_mapping(arm_name, "moa.presets", moa.get("presets"))
+    if active not in presets:
+        raise ContractError(f"arm {arm_name} Hermes active MoA preset not found: {active}")
+    preset = _require_mapping(arm_name, f"moa.presets.{active}", presets[active])
+    _reject_unknown(arm_name, f"moa.presets.{active}", preset, MOA_PRESET_KEYS_0_19_1)
+    if preset.get("enabled", True) is not True:
+        raise ContractError(f"arm {arm_name} Hermes active MoA preset must be enabled")
+    references = preset.get("reference_models")
+    if not isinstance(references, list) or not references:
+        raise ContractError(f"arm {arm_name} Hermes active MoA preset needs reference_models")
+    slots = [(f"reference_models[{index}]", slot) for index, slot in enumerate(references)]
+    slots.append(("aggregator", preset.get("aggregator")))
+    for slot_path, raw_slot in slots:
+        slot = _require_mapping(arm_name, f"moa.presets.{active}.{slot_path}", raw_slot)
+        _reject_unknown(
+            arm_name,
+            f"moa.presets.{active}.{slot_path}",
+            slot,
+            MOA_MODEL_SLOT_KEYS_0_19_1,
+        )
+        slot_provider = _require_nonempty_string(
+            arm_name, f"moa.presets.{active}.{slot_path}.provider", slot.get("provider")
+        )
+        _require_nonempty_string(
+            arm_name, f"moa.presets.{active}.{slot_path}.model", slot.get("model")
+        )
+        if slot_provider == "moa":
+            raise ContractError(f"arm {arm_name} Hermes nested MoA providers are unsupported")
+        if "reasoning_effort" in slot:
+            _validate_reasoning(
+                arm_name,
+                f"moa.presets.{active}.{slot_path}.reasoning_effort",
+                slot["reasoning_effort"],
+            )
 
 
 def arm_hermes_config(arm: dict[str, Any]) -> dict[str, Any]:
@@ -295,6 +505,15 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
 
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     configure_homes(config, source_home, run_dir / "homes")
+    generated_homes = {arm: run_dir / "homes" / arm for arm in config["arms"]}
+    hermes_compatibility = (
+        probe_hermes_compatibility(config, generated_homes)
+        if config.get("compatibility")
+        else {
+            "status": "legacy-unvalidated",
+            "reason": "historical config predates Hermes compatibility profiles",
+        }
+    )
     sanitized_questions = [{k: v for k, v in q.items() if k != "_source_file"} for q in selected]
     manifest = {
         "experiment_id": config["experiment_id"],
@@ -327,6 +546,7 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
             arm: sha256_bytes((run_dir / "homes" / arm / "config.yaml").read_bytes())
             for arm in config["arms"]
         },
+        "hermes_compatibility": hermes_compatibility,
         "selection": {
             "method": selection_method,
             "question_ids": [str(q["question_id"]) for q in selected],
@@ -414,6 +634,165 @@ def subprocess_environment(home: Path) -> dict[str, str]:
     }
     env["HERMES_HOME"] = str(home)
     return env
+
+
+def parse_hermes_version(output: str) -> str:
+    match = re.search(r"Hermes Agent v(\d+\.\d+\.\d+)", output)
+    if not match:
+        raise ContractError(f"unable to parse Hermes version from: {output.strip()!r}")
+    return match.group(1)
+
+
+def _probe_failure(
+    arm_name: str,
+    version: str,
+    home: Path,
+    command: list[str],
+    stdout: str,
+    stderr: str,
+) -> ContractError:
+    details = stderr.strip() or stdout.strip() or "command returned no diagnostic output"
+    rendered = " ".join(command)
+    return ContractError(
+        f"Hermes compatibility check failed for arm '{arm_name}'\n"
+        f"Hermes version: {version}\n"
+        f"Generated config: {home / 'config.yaml'}\n"
+        f"Command: HERMES_HOME={home} {rendered}\n"
+        f"Hermes diagnostic:\n{details}"
+    )
+
+
+def _run_probe_command(
+    runner,
+    command: list[str],
+    *,
+    arm_name: str,
+    version: str,
+    home: Path,
+):
+    result = runner(
+        command,
+        text=True,
+        capture_output=True,
+        env=subprocess_environment(home),
+        check=False,
+    )
+    if result.returncode != 0:
+        raise _probe_failure(arm_name, version, home, command, result.stdout, result.stderr)
+    return result
+
+
+def probe_hermes_compatibility(
+    config: dict[str, Any],
+    homes: dict[str, Path],
+    *,
+    executable: str | None = None,
+    runner=None,
+) -> dict[str, Any]:
+    profile = config.get("compatibility", {}).get("hermes", {}).get("profile")
+    if profile not in SUPPORTED_HERMES_PROFILES:
+        supported = ", ".join(sorted(SUPPORTED_HERMES_PROFILES))
+        raise ContractError(f"unsupported Hermes compatibility profile; supported: {supported}")
+    resolved = executable or shutil.which("hermes")
+    if not resolved:
+        raise ContractError("Hermes executable not found on PATH; install Hermes before prepare")
+    command_runner = runner or subprocess.run
+    version_result = command_runner(
+        [resolved, "--version"], text=True, capture_output=True, check=False
+    )
+    if version_result.returncode != 0:
+        diagnostic = version_result.stderr.strip() or version_result.stdout.strip()
+        raise ContractError(f"failed to execute Hermes version probe: {diagnostic}")
+    version_output = version_result.stdout + "\n" + version_result.stderr
+    version = parse_hermes_version(version_output)
+    if version != profile:
+        raise ContractError(
+            f"experiment requires Hermes {profile}, but installed {version}; "
+            "install the supported version or add and test a new compatibility profile"
+        )
+
+    arm_reports: dict[str, Any] = {}
+    for arm_name, arm in config["arms"].items():
+        home = homes[arm_name]
+        validate_hermes_arm_schema(arm_name, arm, str(profile))
+        config_check = [resolved, "config", "check"]
+        _run_probe_command(
+            command_runner,
+            config_check,
+            arm_name=arm_name,
+            version=version,
+            home=home,
+        )
+        hermes_cfg = arm_hermes_config(arm)
+        expected: dict[str, Any] = {
+            "model.provider": hermes_cfg["model"]["provider"],
+            "model.default": hermes_cfg["model"]["default"],
+            "agent.reasoning_effort": hermes_cfg["agent"]["reasoning_effort"],
+            "moa.enabled": hermes_cfg["moa"]["enabled"],
+        }
+        if hermes_cfg["moa"]["enabled"]:
+            expected["moa.active_preset"] = hermes_cfg["moa"]["active_preset"]
+        effective: dict[str, Any] = {}
+        for key, expected_value in expected.items():
+            command = [resolved, "config", "get", key, "--json"]
+            result = _run_probe_command(
+                command_runner,
+                command,
+                arm_name=arm_name,
+                version=version,
+                home=home,
+            )
+            try:
+                actual_value = json.loads(result.stdout)
+            except json.JSONDecodeError as error:
+                raise _probe_failure(
+                    arm_name,
+                    version,
+                    home,
+                    command,
+                    result.stdout,
+                    f"invalid JSON from Hermes config get: {error}",
+                ) from error
+            if actual_value != expected_value:
+                raise ContractError(
+                    f"Hermes effective config mismatch for arm '{arm_name}'\n"
+                    f"Hermes version: {version}\n"
+                    f"Generated config: {home / 'config.yaml'}\n"
+                    f"Path: {key}\nExpected: {expected_value!r}\nActual: {actual_value!r}"
+                )
+            effective[key] = actual_value
+        prompt_command = [resolved, "prompt-size", "--json"]
+        prompt_result = _run_probe_command(
+            command_runner,
+            prompt_command,
+            arm_name=arm_name,
+            version=version,
+            home=home,
+        )
+        try:
+            prompt_report = json.loads(prompt_result.stdout)
+        except json.JSONDecodeError as error:
+            raise _probe_failure(
+                arm_name,
+                version,
+                home,
+                prompt_command,
+                prompt_result.stdout,
+                f"invalid JSON from Hermes prompt-size: {error}",
+            ) from error
+        arm_reports[arm_name] = {
+            "config_check": "passed",
+            "effective": effective,
+            "prompt_size_sha256": sha256_bytes(canonical_json(prompt_report)),
+            "tool_schema_count": int(prompt_report.get("tools", {}).get("count", 0)),
+        }
+    return {
+        "profile": profile,
+        "version": version,
+        "executable": str(Path(resolved).resolve()),
+        "version_line": version_output.strip().splitlines()[0],
+        "arms": arm_reports,
+    }
 
 
 def invoke_pair_parallel(
