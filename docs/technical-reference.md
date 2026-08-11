@@ -3,7 +3,7 @@
 ## Prepare lifecycle
 
 ```bash
-uv run livebench-hermes-ab --config config.yaml prepare \
+uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" prepare \
   --run-dir runs/example
 ```
 
@@ -14,7 +14,7 @@ uv run livebench-hermes-ab --config config.yaml prepare \
 3. loads the local question corpus and resolves the shared scenarios;
 4. validates credentials without recording them in the manifest;
 5. creates isolated Hermes homes for every arm;
-6. runs offline, fail-closed Hermes compatibility probes;
+6. identifies the selected Hermes binary and either runs strict profile probes or records a version-mismatch warning;
 7. freezes scenario, config, question, arm-home, and execution hashes;
 8. writes `manifest.json` and `questions.json`.
 
@@ -25,14 +25,16 @@ Inspect at least:
 - `selection.scenarios`, category/family counts, and `scenarios_sha256`;
 - `execution_contract`;
 - `home_config_sha256`;
-- `hermes_compatibility.version`, profile, and per-arm effective settings.
+- `hermes_compatibility.status`, version, profile, warnings, and per-arm effective settings when verified.
+
+`prepare` is fail-closed for missing binaries, invalid experiment/configuration data, credential errors, and failed probes on the exact verified Hermes profile. A version mismatch alone is warning-only: version-specific probes are skipped and execution remains allowed.
 
 A fresh run directory is required. Runtime directories are created with restrictive permissions and ignored by Git.
 
 ## Execution model
 
 ```bash
-uv run livebench-hermes-ab --config config.yaml run \
+uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" run \
   --run-dir runs/example
 ```
 
@@ -57,10 +59,12 @@ Parallelism is an execution condition, not a model treatment. It may affect late
 
 Before each invocation, the runner verifies frozen config, selected questions, and generated Hermes config hashes. Non-empty answer files are rejected rather than overwritten. A failed arm fails the current cell and run.
 
+The absolute Hermes executable recorded during `prepare` is also used for every model call. This prevents probing one installation and accidentally executing another from `PATH`.
+
 For diagnostics, one arm can be run sequentially:
 
 ```bash
-uv run livebench-hermes-ab --config config.yaml run-arm \
+uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" run-arm \
   --arm moa --run-dir runs/moa-diagnostic
 ```
 
@@ -105,6 +109,8 @@ uv run livebench-hermes-ab --config config.yaml score \
 ```
 
 Scoring is local and deterministic. It uses pinned LiveBench objective processors and makes no judge-model calls.
+
+Compatibility warnings are copied from `manifest.json` into `summary.json`. A complete run made with a mismatched Hermes version is labeled `VALID_WITH_HERMES_WARNING`; objective scores remain available, but the result is not presented as a verified reproduction.
 
 Coverage is compared on the exact common `(question_id, sample_index)` intersection. Unless an explicitly supported amendment applies, incomplete coverage is invalid.
 

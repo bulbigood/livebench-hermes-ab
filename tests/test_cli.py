@@ -10,11 +10,13 @@ from livebench_hermes_ab.cli import (
     arm_identity,
     configure_homes,
     effective_timeout,
+    invoke_arm,
     invoke_pair_parallel,
     load_config,
     paired_arm_parallelism,
     parse_hermes_version,
     probe_hermes_compatibility,
+    resolve_hermes_executable,
     subprocess_environment,
     validate_hermes_arm_schema,
 )
@@ -75,7 +77,8 @@ def test_pair_invocation_runs_one_worker_per_arm_concurrently(tmp_path: Path):
     peak = {"base": 0, "moa": 0}
     lock = threading.Lock()
 
-    def fake_invoke(arm_name, arm, home, question, timeout):
+    def fake_invoke(arm_name, arm, home, question, timeout, *, executable):
+        assert executable == "/project/hermes"
         with lock:
             active[arm_name] += 1
             peak[arm_name] = max(peak[arm_name], active[arm_name])
@@ -90,6 +93,7 @@ def test_pair_invocation_runs_one_worker_per_arm_concurrently(tmp_path: Path):
         homes={"base": tmp_path / "base", "moa": tmp_path / "moa"},
         question={"question_id": "q1", "turns": ["prompt"]},
         timeout=30,
+        executable="/project/hermes",
         invoke=fake_invoke,
     )
 
@@ -194,6 +198,71 @@ def test_parse_hermes_version_from_real_cli_shape():
     )
 
 
+def test_explicit_hermes_executable_wins_over_path(tmp_path: Path, monkeypatch):
+    explicit = tmp_path / "project-hermes"
+    explicit.write_text("#!/bin/sh\n")
+    explicit.chmod(0o755)
+    path_binary = tmp_path / "hermes"
+    path_binary.write_text("#!/bin/sh\n")
+    path_binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    assert resolve_hermes_executable(explicit) == str(explicit.resolve())
+
+
+def test_hermes_executable_environment_override(tmp_path: Path, monkeypatch):
+    selected = tmp_path / "environment-hermes"
+    selected.write_text("#!/bin/sh\n")
+    selected.chmod(0o755)
+    monkeypatch.setenv("HERMES_EXECUTABLE", str(selected))
+    monkeypatch.setenv("PATH", "")
+
+    assert resolve_hermes_executable() == str(selected.resolve())
+
+
+def test_missing_explicit_hermes_executable_fails_without_path_fallback(
+    tmp_path: Path, monkeypatch
+):
+    path_binary = tmp_path / "hermes"
+    path_binary.write_text("#!/bin/sh\n")
+    path_binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    with pytest.raises(ContractError, match="explicit Hermes executable"):
+        resolve_hermes_executable(tmp_path / "missing-hermes")
+
+
+def test_invoke_arm_uses_selected_hermes_executable(tmp_path: Path, monkeypatch):
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": "answer\n", "stderr": ""},
+        )()
+
+    monkeypatch.setattr("livebench_hermes_ab.cli.subprocess.run", fake_run)
+    result = invoke_arm(
+        "control",
+        {
+            "hermes": {
+                "model": {"provider": "openai-codex", "default": "gpt-test"},
+                "agent": {"reasoning_effort": "medium"},
+                "moa": {"enabled": False},
+            }
+        },
+        tmp_path,
+        {"question_id": "q1", "turns": ["prompt"]},
+        30,
+        executable="/project/hermes",
+    )
+
+    assert commands[0][0] == "/project/hermes"
+    assert result["turns"] == ["answer"]
+
+
 def test_hermes_schema_rejects_unknown_treatment_key():
     arm = {
         "hermes": {
@@ -243,7 +312,7 @@ def test_hermes_schema_rejects_inline_credential_without_echoing_value():
     assert leaked_value not in message
 
 
-def test_hermes_probe_fails_closed_on_version_mismatch(tmp_path: Path):
+def test_hermes_probe_warns_and_skips_profile_probes_on_version_mismatch(tmp_path: Path):
     config = {
         "compatibility": {"hermes": {"profile": "0.19.1"}},
         "arms": {
@@ -251,13 +320,15 @@ def test_hermes_probe_fails_closed_on_version_mismatch(tmp_path: Path):
                 "hermes": {
                     "model": {"provider": "openai-codex", "default": "gpt-5.6-sol"},
                     "agent": {"reasoning_effort": "medium"},
-                    "moa": {"enabled": False, "save_traces": False},
+                    "moa": {"enabled": False},
                 }
             }
         },
     }
+    commands = []
 
     def fake_run(command, **kwargs):
+        commands.append(command)
         assert command == ["/fake/hermes", "--version"]
         return type(
             "Result",
@@ -265,13 +336,20 @@ def test_hermes_probe_fails_closed_on_version_mismatch(tmp_path: Path):
             {"returncode": 0, "stdout": "Hermes Agent v0.20.0 (test)\n", "stderr": ""},
         )()
 
-    with pytest.raises(ContractError, match="requires Hermes 0.19.1.*installed 0.20.0"):
-        probe_hermes_compatibility(
-            config,
-            {"control": tmp_path / "control"},
-            executable="/fake/hermes",
-            runner=fake_run,
-        )
+    report = probe_hermes_compatibility(
+        config,
+        {"control": tmp_path / "control"},
+        executable="/fake/hermes",
+        runner=fake_run,
+    )
+
+    assert commands == [["/fake/hermes", "--version"]]
+    assert report["status"] == "unverified-version"
+    assert report["profile"] == "0.19.1"
+    assert report["version"] == "0.20.0"
+    assert report["warning_codes"] == ["HERMES_VERSION_MISMATCH"]
+    assert "model calls may proceed" in report["warnings"][0]
+    assert report["arms"] == {}
 
 
 def test_hermes_probe_reports_arm_config_failure(tmp_path: Path):
@@ -368,6 +446,7 @@ def test_hermes_probe_records_offline_evidence_for_each_arm(tmp_path: Path):
         executable="/fake/hermes",
         runner=fake_run,
     )
+    assert report["status"] == "verified"
     assert report["version"] == "0.19.1"
     assert report["profile"] == "0.19.1"
     assert set(report["arms"]) == {"control", "candidate"}

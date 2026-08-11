@@ -50,9 +50,11 @@ def test_prompt_is_arm_independent_and_preserves_system_and_turns():
     )
 
 
-def test_commands_pin_provider_model_and_disable_tools():
-    base = build_command("base", config()["arms"]["base"], "hello")
-    moa = build_command("moa", config()["arms"]["moa"], "hello")
+def test_commands_pin_executable_provider_model_and_disable_tools():
+    base = build_command("base", config()["arms"]["base"], "hello", executable="/project/hermes")
+    moa = build_command("moa", config()["arms"]["moa"], "hello", executable="/project/hermes")
+    assert base[0] == "/project/hermes"
+    assert moa[0] == "/project/hermes"
     assert base[-4:] == ["--provider", "openai-codex", "--model", "gpt-5.6-sol"]
     assert moa[-4:] == ["--provider", "moa", "--model", "default"]
     assert "--toolsets" not in base

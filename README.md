@@ -20,22 +20,7 @@ You need:
 - Linux or macOS;
 - Git;
 - Python 3.11+;
-- [`uv`](https://docs.astral.sh/uv/);
-- Hermes Agent **0.19.1**.
-
-Install Hermes using the [official installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation/), then verify the version:
-
-```bash
-hermes --version
-```
-
-The output must start with:
-
-```text
-Hermes Agent v0.19.1
-```
-
-A different version is rejected before any model calls. See [Hermes compatibility](docs/configuration.md#hermes-version-compatibility) if yours differs.
+- [`uv`](https://docs.astral.sh/uv/).
 
 ### 2. Clone and install this project
 
@@ -51,12 +36,30 @@ If you already cloned without submodules:
 git submodule update --init --recursive
 ```
 
+Install the pinned project-local Hermes runtime. This does not replace a system Hermes or create a command in `~/.local/bin`:
+
+```bash
+./scripts/install-hermes-runtime.sh
+HERMES="$PWD/.hermes-runtime/hermes-agent/.venv/bin/hermes"
+"$HERMES" --version
+```
+
+The version should be `0.19.1`. The runtime directory is ignored by Git.
+
+You may instead use an existing Hermes:
+
+```bash
+HERMES="$(command -v hermes)"
+```
+
+A different version is allowed, but every output is marked with a Hermes compatibility warning. It is not a verified reproduction and may still fail if that Hermes cannot execute the configured arms. See [Hermes compatibility](docs/configuration.md#hermes-version-compatibility).
+
 ### 3. Configure the two default providers
 
 The default `base` arm uses your existing OpenAI Codex OAuth login:
 
 ```bash
-hermes auth add openai-codex
+"$HERMES" auth add openai-codex
 ```
 
 The default `moa` arm also needs an OpenRouter API key:
@@ -97,11 +100,11 @@ The downloaded `data/` directory is ignored by Git.
 Use a new run directory:
 
 ```bash
-uv run livebench-hermes-ab --config config.yaml prepare \
+uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" prepare \
   --run-dir runs/default
 ```
 
-This validates Hermes, providers, credentials, scenarios, generated arm configs, concurrency, and the pinned LiveBench revision. It then writes `runs/default/manifest.json`.
+This validates credentials, scenarios, generated arm configs, concurrency, and the pinned LiveBench revision. With Hermes `0.19.1`, it also verifies effective provider/model/reasoning/MoA settings. With another version, it records a prominent unverified-version warning instead. It then writes `runs/default/manifest.json`.
 
 Print the planned call count:
 
@@ -118,7 +121,7 @@ For the unchanged default config, the total should be `225`. Stop here if the ar
 ### 6. Run the benchmark — this makes model calls
 
 ```bash
-uv run livebench-hermes-ab --config config.yaml run \
+uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" run \
   --run-dir runs/default
 ```
 
@@ -253,14 +256,14 @@ See [Scenario selection](docs/configuration.md#shared-scenarios) for validation 
 ### 5. Prepare before spending money
 
 ```bash
-uv run livebench-hermes-ab --config my-experiment.yaml prepare \
+uv run livebench-hermes-ab --config my-experiment.yaml --hermes-executable "$HERMES" prepare \
   --run-dir runs/my-experiment
 ```
 
 Check `expected_model_calls`, `selection`, and `hermes_compatibility` in the printed manifest. If they are correct:
 
 ```bash
-uv run livebench-hermes-ab --config my-experiment.yaml run \
+uv run livebench-hermes-ab --config my-experiment.yaml --hermes-executable "$HERMES" run \
   --run-dir runs/my-experiment
 
 uv run livebench-hermes-ab --config my-experiment.yaml score \
@@ -271,7 +274,8 @@ uv run livebench-hermes-ab --config my-experiment.yaml score \
 
 | Error | What to do |
 |---|---|
-| `requires Hermes 0.19.1` | Install the supported Hermes version or add and test a new compatibility profile. Do not merely change the YAML version string. |
+| `Hermes version mismatch` warning | The run is allowed, but its manifest and summary are marked unverified. Use `./scripts/install-hermes-runtime.sh` for the verified version. |
+| explicit Hermes executable is missing | Set `HERMES` to an executable file, or rerun the project-local installer. No fallback occurs after an explicit path is supplied. |
 | `OPENROUTER_API_KEY is missing` | Export it in the same shell before `prepare` and `run`. |
 | `no LiveBench question.jsonl files found` | Run the download command from step 4. |
 | `selected scenario IDs unavailable` | Use IDs present in the pinned local LiveBench release. |

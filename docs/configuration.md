@@ -10,7 +10,7 @@ Harness-owned settings:
 - `selection`: one scenario set shared by all arms;
 - `generation`: samples, retries, and process timeout;
 - `execution`: baseline and concurrency policy;
-- `compatibility`: fail-closed Hermes profile;
+- `compatibility`: verified Hermes profile and mismatch-warning policy;
 - `scoring`: objective scoring declaration;
 - `arms.<name>.credential_env`: credential names allowed for that arm.
 
@@ -226,7 +226,7 @@ For each arm, `prepare` writes only allowlisted values to an isolated `runs/<run
 
 ## Hermes version compatibility
 
-The public config selects:
+The public config selects the verified reference profile:
 
 ```yaml
 compatibility:
@@ -234,10 +234,66 @@ compatibility:
     profile: 0.19.1
 ```
 
-This profile is code-owned. Changing the string cannot make another Hermes schema compatible. `prepare` verifies the executable version, treatment-critical types and keys, generated configuration loading, effective provider/model/reasoning/MoA values, and offline Hermes diagnostics before any model calls.
+The profile is code-owned. Changing the YAML string cannot declare another Hermes schema verified.
 
-Hermes 0.19.1's native `config check` is not sufficient by itself: unknown fields or invalid treatment types may otherwise be ignored. Therefore an unsupported release requires a code change, schema/adapter review, tests, and a new compatibility profile. The harness never auto-migrates frozen configs.
+### Exact version
 
-Compatibility evidence is stored in `manifest.json`, including executable/version, selected profile, per-arm effective settings, config check result, prompt-size digest, and tool schema count.
+For Hermes `0.19.1`, `prepare` runs strict profile-specific checks:
 
-Use the current [Hermes configuration reference](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/) when reviewing a new profile.
+- treatment-critical types and keys;
+- generated configuration loading;
+- effective provider, model, reasoning, and MoA values;
+- native `config check`;
+- offline `prompt-size --json`.
+
+A failed strict probe remains a hard error. It means the nominally supported Hermes did not apply the frozen treatment as expected.
+
+### Different version
+
+A version mismatch is **warning-only**. `prepare` records:
+
+```json
+{
+  "status": "unverified-version",
+  "warning_codes": ["HERMES_VERSION_MISMATCH"]
+}
+```
+
+It prints the same warning to stderr and skips profile-specific probes, because applying a `0.19.1` probe contract to an unknown schema would produce misleading evidence. `run` is allowed to make model calls with the selected binary. The actual Hermes invocation may still fail if that release cannot load or execute the arm configuration.
+
+Scoring preserves the warning. A complete result uses `VALID_WITH_HERMES_WARNING`, not plain `VALID`.
+
+Missing or non-executable binaries, malformed harness configuration, inline credentials, unavailable credentials, and execution failures remain hard errors.
+
+### Executable selection
+
+The same resolved binary is used for `--version`, offline probes, and every model invocation. Selection precedence is:
+
+1. `--hermes-executable /absolute/path/to/hermes`;
+2. `HERMES_EXECUTABLE`;
+3. `hermes` on `PATH`.
+
+An invalid explicit path is a hard error and never falls back to another installation.
+
+### Project-local runtime
+
+Install the verified public Hermes commit into an ignored, isolated venv:
+
+```bash
+./scripts/install-hermes-runtime.sh
+HERMES="$PWD/.hermes-runtime/hermes-agent/.venv/bin/hermes"
+```
+
+The script pins full commit `dac4bbea09a342879d9769d6a5357b12b84b936c`, verifies Hermes `0.19.1`, and does not create or replace `~/.local/bin/hermes`. Override its destination only when needed:
+
+```bash
+HERMES_RUNTIME_DIR=/path/to/runtime ./scripts/install-hermes-runtime.sh
+```
+
+Provider credentials remain in the source Hermes home; runtime installation and credential setup are deliberately separate.
+
+### Evidence and future profiles
+
+Hermes `0.19.1`'s native `config check` is not sufficient by itself: unknown fields or invalid treatment types may otherwise be ignored. The manifest therefore stores executable/version, selected profile, per-arm effective settings when verified, config-check result, prompt-size digest, tool schema count, warning codes, and warnings.
+
+A new verified profile still requires a code change, schema/adapter review, and tests. The harness never auto-migrates frozen configs. Use the current [Hermes configuration reference](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/) during that review.

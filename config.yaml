@@ -59,8 +59,8 @@ execution:
   workers_per_arm: 1
   baseline_arm: base
 compatibility:
-  # Exact fail-closed profile. A different Hermes release needs a reviewed
-  # schema adapter and tests; changing this string cannot bypass the gate.
+  # Verified reference profile. Another installed version is allowed with a
+  # persistent unverified-version warning; changing this string does not add support.
   hermes:
     profile: 0.19.1
 arms:

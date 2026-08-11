@@ -58,7 +58,13 @@ def build_prompt(question: dict[str, Any], prior_answers: list[str]) -> str:
     return "\n\n".join(chunks)
 
 
-def build_command(arm_name: str, arm: dict[str, Any], prompt: str) -> list[str]:
+def build_command(
+    arm_name: str,
+    arm: dict[str, Any],
+    prompt: str,
+    *,
+    executable: str = "hermes",
+) -> list[str]:
     hermes = arm.get("hermes")
     if hermes is not None:
         provider = hermes["model"]["provider"]
@@ -67,7 +73,7 @@ def build_command(arm_name: str, arm: dict[str, Any], prompt: str) -> list[str]:
         provider = arm["provider"]
         model = arm["model"]
     return [
-        "hermes",
+        executable,
         "--ignore-rules",
         "--oneshot",
         prompt,

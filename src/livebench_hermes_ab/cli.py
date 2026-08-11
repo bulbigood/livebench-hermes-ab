@@ -371,6 +371,26 @@ def effective_timeout(config: dict[str, Any]) -> int:
     return timeout
 
 
+def resolve_hermes_executable(explicit: Path | str | None = None) -> str:
+    if explicit is not None:
+        candidate = Path(explicit).expanduser().resolve()
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise ContractError(
+                f"explicit Hermes executable is missing or not executable: {candidate}"
+            )
+        return str(candidate)
+    env_candidate = os.environ.get("HERMES_EXECUTABLE")
+    if env_candidate:
+        return resolve_hermes_executable(env_candidate)
+    resolved = shutil.which("hermes")
+    if not resolved:
+        raise ContractError(
+            "Hermes executable not found; pass --hermes-executable, set "
+            "HERMES_EXECUTABLE, or install Hermes on PATH"
+        )
+    return str(Path(resolved).resolve())
+
+
 def paired_arm_parallelism(config: dict[str, Any]) -> bool:
     execution = config.get("execution", {})
     if execution.get("parallelism") != "paired_arms":
@@ -439,8 +459,14 @@ def discover_questions(config: dict[str, Any]) -> list[Path]:
     return sorted({path.resolve() for path in paths})
 
 
-def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, Any]:
+def prepare(
+    config_path: Path,
+    source_home: Path,
+    run_dir: Path,
+    hermes_executable: str | None = None,
+) -> dict[str, Any]:
     config = load_config(config_path)
+    resolved_hermes = hermes_executable or resolve_hermes_executable()
     actual_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=ROOT / "upstream",
@@ -513,13 +539,20 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
     configure_homes(config, source_home, run_dir / "homes")
     generated_homes = {arm: run_dir / "homes" / arm for arm in config["arms"]}
     hermes_compatibility = (
-        probe_hermes_compatibility(config, generated_homes)
+        probe_hermes_compatibility(config, generated_homes, executable=resolved_hermes)
         if config.get("compatibility")
         else {
             "status": "legacy-unvalidated",
             "reason": "historical config predates Hermes compatibility profiles",
+            "executable": resolved_hermes,
+            "warning_codes": ["LEGACY_UNVALIDATED_HERMES"],
+            "warnings": [
+                "historical config has no Hermes compatibility profile; behavior is unverified"
+            ],
         }
     )
+    for warning in hermes_compatibility.get("warnings", []):
+        print(f"WARNING: {warning}", file=sys.stderr)
     sanitized_questions = [{k: v for k, v in q.items() if k != "_source_file"} for q in selected]
     manifest = {
         "experiment_id": config["experiment_id"],
@@ -616,12 +649,14 @@ def invoke_arm(
     home: Path,
     question: dict[str, Any],
     timeout: int,
+    *,
+    executable: str = "hermes",
 ) -> dict[str, Any]:
     turns: list[str] = []
     started = time.monotonic()
     for _ in question["turns"]:
         prompt = build_prompt(question, turns)
-        command = build_command(arm_name, arm, prompt)
+        command = build_command(arm_name, arm, prompt, executable=executable)
         env = subprocess_environment(home)
         completed = subprocess.run(
             command,
@@ -725,10 +760,21 @@ def probe_hermes_compatibility(
     version_output = version_result.stdout + "\n" + version_result.stderr
     version = parse_hermes_version(version_output)
     if version != profile:
-        raise ContractError(
-            f"experiment requires Hermes {profile}, but installed {version}; "
-            "install the supported version or add and test a new compatibility profile"
+        warning = (
+            f"Hermes version mismatch: expected profile {profile}, installed {version}; "
+            "profile-specific compatibility probes were skipped and model calls may proceed "
+            "with unverified Hermes behavior"
         )
+        return {
+            "status": "unverified-version",
+            "profile": profile,
+            "version": version,
+            "executable": str(Path(resolved).resolve()),
+            "version_line": version_output.strip().splitlines()[0],
+            "warning_codes": ["HERMES_VERSION_MISMATCH"],
+            "warnings": [warning],
+            "arms": {},
+        }
 
     arm_reports: dict[str, Any] = {}
     for arm_name, arm in config["arms"].items():
@@ -806,10 +852,13 @@ def probe_hermes_compatibility(
             "tool_schema_count": int(prompt_report.get("tools", {}).get("count", 0)),
         }
     return {
+        "status": "verified",
         "profile": profile,
         "version": version,
         "executable": str(Path(resolved).resolve()),
         "version_line": version_output.strip().splitlines()[0],
+        "warning_codes": [],
+        "warnings": [],
         "arms": arm_reports,
     }
 
@@ -819,21 +868,35 @@ def invoke_pair_parallel(
     homes: dict[str, Path],
     question: dict[str, Any],
     timeout: int,
+    *,
+    executable: str = "hermes",
     invoke=invoke_arm,
 ) -> dict[str, dict[str, Any]]:
     with ThreadPoolExecutor(max_workers=len(arms), thread_name_prefix="livebench-arm") as executor:
         futures = {
             arm_name: executor.submit(
-                invoke, arm_name, arms[arm_name], homes[arm_name], question, timeout
+                invoke,
+                arm_name,
+                arms[arm_name],
+                homes[arm_name],
+                question,
+                timeout,
+                executable=executable,
             )
             for arm_name in arms
         }
         return {arm_name: future.result() for arm_name, future in futures.items()}
 
 
-def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
+def run(
+    config_path: Path,
+    source_home: Path,
+    run_dir: Path,
+    hermes_executable: str | None = None,
+) -> None:
     config = load_config(config_path)
-    manifest = prepare(config_path, source_home, run_dir)
+    resolved_hermes = resolve_hermes_executable(hermes_executable)
+    manifest = prepare(config_path, source_home, run_dir, resolved_hermes)
     questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
     by_id = {str(q["question_id"]): q for q in questions}
     raw_dir = run_dir / "raw"
@@ -852,6 +915,7 @@ def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
                 {arm: run_dir / "homes" / arm for arm in config["arms"]},
                 question,
                 effective_timeout(config),
+                executable=resolved_hermes,
             )
         else:
             results = {
@@ -861,6 +925,7 @@ def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
                     run_dir / "homes" / arm_name,
                     question,
                     effective_timeout(config),
+                    executable=resolved_hermes,
                 )
                 for arm_name in pair["order"]
             }
@@ -900,11 +965,18 @@ def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
             )
 
 
-def run_single_arm(config_path: Path, source_home: Path, run_dir: Path, arm_name: str) -> None:
+def run_single_arm(
+    config_path: Path,
+    source_home: Path,
+    run_dir: Path,
+    arm_name: str,
+    hermes_executable: str | None = None,
+) -> None:
     config = load_config(config_path)
     if arm_name not in config["arms"]:
         raise ContractError(f"unknown arm: {arm_name}")
-    manifest = prepare(config_path, source_home, run_dir)
+    resolved_hermes = resolve_hermes_executable(hermes_executable)
+    manifest = prepare(config_path, source_home, run_dir, resolved_hermes)
     questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
     by_id = {str(q["question_id"]): q for q in questions}
     raw_dir = run_dir / "raw"
@@ -921,6 +993,7 @@ def run_single_arm(config_path: Path, source_home: Path, run_dir: Path, arm_name
             run_dir / "homes" / arm_name,
             question,
             effective_timeout(config),
+            executable=resolved_hermes,
         )
         provider, model, reasoning = arm_identity(config["arms"][arm_name])
         record = {
@@ -959,6 +1032,11 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Multi-arm Hermes Agent runner for LiveBench")
     p.add_argument("--config", type=Path, default=ROOT / "config.yaml")
     p.add_argument("--source-hermes-home", type=Path, default=Path.home() / ".hermes")
+    p.add_argument(
+        "--hermes-executable",
+        type=Path,
+        help="Exact Hermes binary to probe and use; overrides HERMES_EXECUTABLE and PATH",
+    )
     sub = p.add_subparsers(dest="command", required=True)
     prep = sub.add_parser("prepare", help="No-cost validation and manifest creation")
     prep.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
@@ -978,12 +1056,23 @@ def main() -> None:
     args = parser().parse_args()
     try:
         if args.command == "prepare":
-            manifest = prepare(args.config, args.source_hermes_home, args.run_dir)
+            manifest = prepare(
+                args.config,
+                args.source_hermes_home,
+                args.run_dir,
+                resolve_hermes_executable(args.hermes_executable),
+            )
             print(json.dumps(manifest, indent=2, ensure_ascii=False))
         elif args.command == "run":
-            run(args.config, args.source_hermes_home, args.run_dir)
+            run(args.config, args.source_hermes_home, args.run_dir, args.hermes_executable)
         elif args.command == "run-arm":
-            run_single_arm(args.config, args.source_hermes_home, args.run_dir, args.arm)
+            run_single_arm(
+                args.config,
+                args.source_hermes_home,
+                args.run_dir,
+                args.arm,
+                args.hermes_executable,
+            )
         else:
             from .scoring import score_run
 

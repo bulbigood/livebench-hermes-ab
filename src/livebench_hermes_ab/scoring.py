@@ -8,6 +8,35 @@ from typing import Any
 
 from .core import ContractError, canonical_json, sha256_bytes
 
+
+def summary_status(manifest: dict[str, Any], excluded: bool) -> str:
+    compatibility_status = manifest.get("hermes_compatibility", {}).get("status")
+    hermes_warning = compatibility_status != "verified"
+    if excluded and hermes_warning:
+        return "VALID_WITH_ONE_INFRA_EXCLUSION_AND_HERMES_WARNING"
+    if excluded:
+        return "VALID_WITH_ONE_INFRA_EXCLUSION"
+    if hermes_warning:
+        return "VALID_WITH_HERMES_WARNING"
+    return "VALID"
+
+
+def summary_compatibility(manifest: dict[str, Any]) -> dict[str, Any]:
+    report = manifest.get("hermes_compatibility", {})
+    return {
+        key: report[key]
+        for key in (
+            "status",
+            "profile",
+            "version",
+            "executable",
+            "warning_codes",
+            "warnings",
+        )
+        if key in report
+    }
+
+
 ROOT = Path(__file__).resolve().parents[2]
 UPSTREAM = ROOT / "upstream"
 if str(UPSTREAM) not in sys.path:
@@ -216,7 +245,8 @@ def score_run(run_dir: Path) -> dict[str, Any]:
     moa_scores = [d["moa"] for d in deltas]
     task_means = {qid: sum(vals) / len(vals) for qid, vals in sorted(by_task.items())}
     summary = {
-        "status": "VALID_WITH_ONE_INFRA_EXCLUSION" if excluded else "VALID",
+        "status": summary_status(manifest, bool(excluded)),
+        "hermes_compatibility": summary_compatibility(manifest),
         "planned_pairs": len(expected),
         "excluded_pairs": len(excluded),
         "scored_pairs": len(effective),
@@ -339,7 +369,8 @@ def score_multiarm_run(
             "regressions": sum(value < 0 for value in sample_deltas),
         }
     summary = {
-        "status": "VALID_WITH_ONE_INFRA_EXCLUSION" if excluded else "VALID",
+        "status": summary_status(manifest, bool(excluded)),
+        "hermes_compatibility": summary_compatibility(manifest),
         "baseline_arm": baseline,
         "arms": arm_names,
         "planned_pairs": len(expected),
