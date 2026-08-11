@@ -5,3 +5,7 @@ __pycache__/
 runs/
 data/
 *.pyc
+dist/
+build/
+*.egg-info/
+.coverage

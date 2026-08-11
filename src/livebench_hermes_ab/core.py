@@ -58,17 +58,22 @@ def build_prompt(question: dict[str, Any], prior_answers: list[str]) -> str:
 
 
 def build_command(arm_name: str, arm: dict[str, Any], prompt: str) -> list[str]:
-    if arm_name not in {"base", "moa"}:
-        raise ContractError(f"unknown arm {arm_name}")
+    hermes = arm.get("hermes")
+    if hermes is not None:
+        provider = hermes["model"]["provider"]
+        model = hermes["model"]["default"]
+    else:
+        provider = arm["provider"]
+        model = arm["model"]
     return [
         "hermes",
         "--ignore-rules",
         "--oneshot",
         prompt,
         "--provider",
-        str(arm["provider"]),
+        str(provider),
         "--model",
-        str(arm["model"]),
+        str(model),
     ]
 
 
@@ -139,8 +144,12 @@ def validate_frozen_selection(selected: list[dict[str, Any]], selection: dict[st
 
 
 def make_pairs(
-    questions: list[dict[str, Any]], seed: int, samples_per_task: int = 1
+    questions: list[dict[str, Any]],
+    seed: int,
+    samples_per_task: int = 1,
+    arms: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    arm_names = arms or ["base", "moa"]
     if samples_per_task < 1:
         raise ContractError("samples_per_task must be positive")
     ordered = [
@@ -158,7 +167,7 @@ def make_pairs(
                 "pair_id": sha256_bytes(f"{seed}:{qid}:{sample_index}".encode())[:16],
                 "question_id": qid,
                 "sample_index": sample_index,
-                "order": ["base", "moa"] if idx % 2 == 0 else ["moa", "base"],
+                "order": arm_names[idx % len(arm_names) :] + arm_names[: idx % len(arm_names)],
             }
         )
     return result

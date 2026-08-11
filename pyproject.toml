@@ -1,7 +1,9 @@
 [project]
 name = "livebench-hermes-ab"
-version = "0.1.0"
-description = "Paired LiveBench A/B harness for Hermes BASE vs MoA"
+version = "0.2.0"
+description = "Reproducible multi-arm LiveBench harness for Hermes Agent"
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
   "pyyaml>=6.0.2",

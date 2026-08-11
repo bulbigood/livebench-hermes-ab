@@ -59,9 +59,98 @@ DISABLED_TOOLSETS = [
 
 
 def load_config(path: Path) -> dict[str, Any]:
-    config = yaml.safe_load(path.read_text(encoding="utf-8"))
-    validate_treatment_boundary(config)
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if "experiment" in raw:
+        experiment = dict(raw.get("experiment", {}))
+        config = {
+            "experiment_id": experiment.pop("id"),
+            **experiment,
+            "selection": raw.get("selection", {}),
+            "generation": raw.get("generation", {}),
+            "execution": raw.get("execution", {}),
+            "arms": raw.get("arms", {}),
+        }
+        config["concurrency"] = len(config["arms"])
+        validate_generic_config(config)
+    else:
+        config = raw
+        validate_treatment_boundary(config)
     return config
+
+
+def validate_generic_config(config: dict[str, Any]) -> None:
+    arms = config.get("arms", {})
+    if len(arms) < 2:
+        raise ContractError("TOML experiments require at least two arms")
+    if config.get("execution", {}).get("workers_per_arm") != 1:
+        raise ContractError("execution.workers_per_arm must be exactly 1")
+    for name, arm in arms.items():
+        if not name.replace("-", "").replace("_", "").isalnum():
+            raise ContractError(f"unsafe arm name: {name}")
+        hermes = arm.get("hermes")
+        if not isinstance(hermes, dict):
+            raise ContractError(f"arm {name} requires a hermes table")
+        arm_identity(arm)
+        credentials = arm.get("credential_env", [])
+        if not isinstance(credentials, list) or not all(
+            isinstance(key, str) for key in credentials
+        ):
+            raise ContractError(f"arm {name} credential_env must be a list of names")
+
+
+def arm_hermes_config(arm: dict[str, Any]) -> dict[str, Any]:
+    if "hermes" in arm:
+        return arm["hermes"]
+    cfg: dict[str, Any] = {
+        "model": {"default": arm["model"], "provider": arm["provider"]},
+        "agent": {
+            "reasoning_effort": str(
+                arm.get("reasoning_effort") or arm.get("aggregator", {}).get("reasoning_effort")
+            ),
+            "disabled_toolsets": DISABLED_TOOLSETS,
+        },
+        "moa": {
+            "enabled": bool(arm["moa_enabled"]),
+            "default_preset": "default",
+            "active_preset": "default" if arm["moa_enabled"] else "",
+            "save_traces": bool(arm["moa_enabled"]),
+            "presets": {},
+        },
+    }
+    if arm["moa_enabled"]:
+        cfg["moa"]["presets"]["default"] = {
+            "enabled": True,
+            "degraded_reference_policy": "loud",
+            "reference_max_tokens": 10000,
+            "max_tokens": 4096,
+            "fanout": "every_n:3",
+            "reference_models": arm["references"],
+            "aggregator": arm["aggregator"],
+        }
+    return cfg
+
+
+def arm_identity(arm: dict[str, Any]) -> tuple[str, str, str]:
+    hermes = arm_hermes_config(arm)
+    try:
+        return (
+            str(hermes["model"]["provider"]),
+            str(hermes["model"]["default"]),
+            str(hermes["agent"]["reasoning_effort"]),
+        )
+    except KeyError as error:
+        raise ContractError(f"incomplete Hermes model/agent config: missing {error}") from error
+
+
+def arm_reference_models(arm: dict[str, Any]) -> list[dict[str, Any]]:
+    if "hermes" not in arm:
+        return list(arm.get("references") or [])
+    moa = arm["hermes"].get("moa", {})
+    if not moa.get("enabled"):
+        return []
+    preset_name = str(moa.get("active_preset") or moa.get("default_preset") or "default")
+    preset = moa.get("presets", {}).get(preset_name, {})
+    return list(preset.get("reference_models") or [])
 
 
 def effective_timeout(config: dict[str, Any]) -> int:
@@ -75,12 +164,13 @@ def paired_arm_parallelism(config: dict[str, Any]) -> bool:
     execution = config.get("execution", {})
     if execution.get("parallelism") != "paired_arms":
         return False
-    expected_workers = {"base": 1, "moa": 1}
     workers = execution.get("workers_per_arm")
-    if workers != expected_workers or int(config.get("concurrency", 0)) != 2:
-        raise ContractError(
-            "paired_arms requires concurrency: 2 and workers_per_arm: {base: 1, moa: 1}"
-        )
+    if "hermes" in next(iter(config["arms"].values())):
+        valid = workers == 1 and int(config.get("concurrency", 0)) == len(config["arms"])
+    else:
+        valid = workers == {"base": 1, "moa": 1} and int(config.get("concurrency", 0)) == 2
+    if not valid:
+        raise ContractError("paired_arms requires exactly one worker per configured arm")
     return True
 
 
@@ -88,32 +178,7 @@ def configure_homes(config: dict[str, Any], source_home: Path, output_root: Path
     for arm_name, arm in config["arms"].items():
         home = output_root / arm_name
         home.mkdir(parents=True, exist_ok=True, mode=0o700)
-        cfg: dict[str, Any] = {
-            "model": {"default": arm["model"], "provider": arm["provider"]},
-            "agent": {
-                "reasoning_effort": str(
-                    arm.get("reasoning_effort") or arm.get("aggregator", {}).get("reasoning_effort")
-                ),
-                "disabled_toolsets": DISABLED_TOOLSETS,
-            },
-            "moa": {
-                "enabled": bool(arm["moa_enabled"]),
-                "default_preset": "default",
-                "active_preset": "default" if arm["moa_enabled"] else "",
-                "save_traces": bool(arm["moa_enabled"]),
-                "presets": {},
-            },
-        }
-        if arm_name == "moa":
-            cfg["moa"]["presets"]["default"] = {
-                "enabled": True,
-                "degraded_reference_policy": "loud",
-                "reference_max_tokens": 10000,
-                "max_tokens": int(config.get("max_tokens", 4096)),
-                "fanout": "every_n:3",
-                "reference_models": arm["references"],
-                "aggregator": arm["aggregator"],
-            }
+        cfg = arm_hermes_config(arm)
         (home / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=True), encoding="utf-8")
         os.chmod(home / "config.yaml", 0o600)
         auth_source = source_home / "auth.json"
@@ -125,7 +190,12 @@ def configure_homes(config: dict[str, Any], source_home: Path, output_root: Path
         auth_target.symlink_to(auth_source)
 
         env_sources = [source_home / ".env", Path("/etc/environment")]
-        allowed = {"OPENROUTER_API_KEY"} if arm_name == "moa" else set()
+        allowed = set(
+            arm.get(
+                "credential_env",
+                ["OPENROUTER_API_KEY"] if arm.get("moa_enabled") else [],
+            )
+        )
         resolved: dict[str, str] = {}
         for key in allowed:
             if os.environ.get(key):
@@ -218,7 +288,10 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
             raise ContractError("sample_size must equal the number of selection_categories")
         samples_per_task = 1
         selection_method = "one-per-category blind complexity rank"
-    selected_pairs = make_pairs(selected, int(config["seed"]), samples_per_task)
+    execution_arms = list(config.get("execution_arms") or config["arms"])
+    selected_pairs = make_pairs(
+        selected, int(config["seed"]), samples_per_task, arms=execution_arms
+    )
 
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     configure_homes(config, source_home, run_dir / "homes")
@@ -232,24 +305,20 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
         "task_count": len(selected),
         "samples_per_task": samples_per_task,
         "paired_units": len(selected_pairs),
-        "expected_cells": len(selected_pairs) * len(config.get("execution_arms", ["base", "moa"])),
+        "expected_cells": len(selected_pairs) * len(execution_arms),
         "expected_model_calls": {
-            "base_main": len(selected_pairs)
-            if "base" in config.get("execution_arms", ["base", "moa"])
-            else 0,
-            "moa_aggregator": len(selected_pairs)
-            if "moa" in config.get("execution_arms", ["base", "moa"])
-            else 0,
-            "moa_references": (
-                len(selected_pairs) * len(config["arms"]["moa"]["references"])
-                if "moa" in config.get("execution_arms", ["base", "moa"])
-                else 0
-            ),
+            "by_arm": {
+                arm: {
+                    "main": len(selected_pairs),
+                    "references": len(selected_pairs)
+                    * len(arm_reference_models(config["arms"][arm])),
+                }
+                for arm in execution_arms
+            },
             "judge": 0,
-            "total": len(selected_pairs)
-            * sum(
-                1 if arm == "base" else 1 + len(config["arms"]["moa"]["references"])
-                for arm in config.get("execution_arms", ["base", "moa"])
+            "total": sum(
+                len(selected_pairs) * (1 + len(arm_reference_models(config["arms"][arm])))
+                for arm in execution_arms
             ),
         },
         "pairs": selected_pairs,
@@ -268,6 +337,7 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
         },
         "execution_contract": {
             "concurrency": int(config["concurrency"]),
+            "baseline_arm": config.get("execution", {}).get("baseline_arm", "base"),
             "parallelism": config.get("execution", {}).get("parallelism", "sequential"),
             "workers_per_arm": config.get("execution", {}).get(
                 "workers_per_arm", {"base": 1, "moa": 1}
@@ -275,7 +345,7 @@ def prepare(config_path: Path, source_home: Path, run_dir: Path) -> dict[str, An
             "retries": int(config.get("generation", {}).get("retries", 0)),
             "timeout_seconds": int(config.get("generation", {}).get("timeout_seconds", 900)),
             "order": (
-                "seeded task/sample order; BASE and MoA synchronized per pair"
+                "seeded task/sample order; all arms synchronized per cell"
                 if paired_arm_parallelism(config)
                 else "seeded shuffle of task/sample units; alternating arm-first order"
             ),
@@ -313,8 +383,7 @@ def invoke_arm(
     for _ in question["turns"]:
         prompt = build_prompt(question, turns)
         command = build_command(arm_name, arm, prompt)
-        env = os.environ.copy()
-        env["HERMES_HOME"] = str(home)
+        env = subprocess_environment(home)
         completed = subprocess.run(
             command,
             cwd=ROOT,
@@ -336,6 +405,17 @@ def invoke_arm(
     }
 
 
+def subprocess_environment(home: Path) -> dict[str, str]:
+    secret_markers = ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not any(marker in key.upper() for marker in secret_markers)
+    }
+    env["HERMES_HOME"] = str(home)
+    return env
+
+
 def invoke_pair_parallel(
     arms: dict[str, dict[str, Any]],
     homes: dict[str, Path],
@@ -343,12 +423,12 @@ def invoke_pair_parallel(
     timeout: int,
     invoke=invoke_arm,
 ) -> dict[str, dict[str, Any]]:
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="livebench-arm") as executor:
+    with ThreadPoolExecutor(max_workers=len(arms), thread_name_prefix="livebench-arm") as executor:
         futures = {
             arm_name: executor.submit(
                 invoke, arm_name, arms[arm_name], homes[arm_name], question, timeout
             )
-            for arm_name in ("base", "moa")
+            for arm_name in arms
         }
         return {arm_name: future.result() for arm_name, future in futures.items()}
 
@@ -371,7 +451,7 @@ def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
         if paired_arm_parallelism(config):
             results = invoke_pair_parallel(
                 config["arms"],
-                {arm: run_dir / "homes" / arm for arm in ("base", "moa")},
+                {arm: run_dir / "homes" / arm for arm in config["arms"]},
                 question,
                 effective_timeout(config),
             )
@@ -388,6 +468,7 @@ def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
             }
         for arm_name in pair["order"]:
             result = results[arm_name]
+            provider, model, reasoning = arm_identity(config["arms"][arm_name])
             record = {
                 "question_id": question["question_id"],
                 "answer_id": sha256_bytes(f"{pair['pair_id']}:{arm_name}".encode())[:16],
@@ -401,9 +482,9 @@ def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
                 "total_cached_tokens": None,
                 "cost_usd": None,
                 "api_info": {
-                    "provider": config["arms"][arm_name]["provider"],
-                    "api_name": config["arms"][arm_name]["model"],
-                    "reasoning_effort": config["arms"][arm_name]["reasoning_effort"],
+                    "provider": provider,
+                    "api_name": model,
+                    "reasoning_effort": reasoning,
                     "pair_id": pair["pair_id"],
                     "sample_index": pair["sample_index"],
                     "response_sha256": result["stdout_sha256"],
@@ -411,37 +492,44 @@ def run(config_path: Path, source_home: Path, run_dir: Path) -> None:
             }
             with (raw_dir / f"hermes-{arm_name}.jsonl").open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    validate_moa_traces(run_dir, expected_count=len(manifest["pairs"]))
+    for arm_name, arm in config["arms"].items():
+        if arm_reference_models(arm):
+            validate_moa_traces(
+                run_dir,
+                expected_count=len(manifest["pairs"]),
+                arm_name=arm_name,
+                hermes_config=arm_hermes_config(arm),
+            )
 
 
 def run_single_arm(config_path: Path, source_home: Path, run_dir: Path, arm_name: str) -> None:
     config = load_config(config_path)
-    execution_arms = config.get("execution_arms")
-    if execution_arms != [arm_name] or arm_name != "moa":
-        raise ContractError("single-arm execution must be frozen as execution_arms: [moa]")
+    if arm_name not in config["arms"]:
+        raise ContractError(f"unknown arm: {arm_name}")
     manifest = prepare(config_path, source_home, run_dir)
     questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
     by_id = {str(q["question_id"]): q for q in questions}
     raw_dir = run_dir / "raw"
     raw_dir.mkdir(exist_ok=True, mode=0o700)
-    answer_path = raw_dir / "hermes-moa.jsonl"
+    answer_path = raw_dir / f"hermes-{arm_name}.jsonl"
     if answer_path.exists() and answer_path.stat().st_size:
-        raise ContractError("run directory already contains MoA answers")
+        raise ContractError(f"run directory already contains {arm_name} answers")
     for pair in manifest["pairs"]:
         verify_run_integrity(config_path, run_dir, manifest)
         question = by_id[pair["question_id"]]
         result = invoke_arm(
-            "moa",
-            config["arms"]["moa"],
-            run_dir / "homes" / "moa",
+            arm_name,
+            config["arms"][arm_name],
+            run_dir / "homes" / arm_name,
             question,
             effective_timeout(config),
         )
+        provider, model, reasoning = arm_identity(config["arms"][arm_name])
         record = {
             "question_id": question["question_id"],
-            "answer_id": sha256_bytes(f"{pair['pair_id']}:moa".encode())[:16],
+            "answer_id": sha256_bytes(f"{pair['pair_id']}:{arm_name}".encode())[:16],
             "sample_index": pair["sample_index"],
-            "model_id": "hermes-moa-low",
+            "model_id": f"hermes-{arm_name}",
             "choices": [{"index": 0, "turns": result["turns"]}],
             "tstamp": time.time(),
             "total_time_s": result["total_time_s"],
@@ -450,9 +538,9 @@ def run_single_arm(config_path: Path, source_home: Path, run_dir: Path, arm_name
             "total_cached_tokens": None,
             "cost_usd": None,
             "api_info": {
-                "provider": "moa",
-                "api_name": config["arms"]["moa"]["model"],
-                "reasoning_effort": config["arms"]["moa"]["reasoning_effort"],
+                "provider": provider,
+                "api_name": model,
+                "reasoning_effort": reasoning,
                 "pair_id": pair["pair_id"],
                 "sample_index": pair["sample_index"],
                 "response_sha256": result["stdout_sha256"],
@@ -460,12 +548,18 @@ def run_single_arm(config_path: Path, source_home: Path, run_dir: Path, arm_name
         }
         with answer_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    validate_moa_traces(run_dir, expected_count=len(manifest["pairs"]))
+    if arm_reference_models(config["arms"][arm_name]):
+        validate_moa_traces(
+            run_dir,
+            expected_count=len(manifest["pairs"]),
+            arm_name=arm_name,
+            hermes_config=arm_hermes_config(config["arms"][arm_name]),
+        )
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Paired Hermes BASE/MoA runner for LiveBench")
-    p.add_argument("--config", type=Path, default=ROOT / "config/experiment.yaml")
+    p = argparse.ArgumentParser(description="Multi-arm Hermes Agent runner for LiveBench")
+    p.add_argument("--config", type=Path, default=ROOT / "config.yaml")
     p.add_argument("--source-hermes-home", type=Path, default=Path.home() / ".hermes")
     sub = p.add_subparsers(dest="command", required=True)
     prep = sub.add_parser("prepare", help="No-cost validation and manifest creation")
@@ -474,7 +568,7 @@ def parser() -> argparse.ArgumentParser:
     execute.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
 
     execute_arm = sub.add_parser("run-arm", help="Execute a frozen single treatment arm")
-    execute_arm.add_argument("--arm", choices=["moa"], required=True)
+    execute_arm.add_argument("--arm", required=True)
     execute_arm.add_argument("--run-dir", type=Path, required=True)
 
     score = sub.add_parser("score", help="Run pinned deterministic LiveBench scorers")

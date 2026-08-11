@@ -154,6 +154,11 @@ def score_run(run_dir: Path) -> dict[str, Any]:
         if not excluded.issubset(expected):
             raise ContractError("excluded cell is outside frozen matrix")
     effective = expected - excluded
+    arm_names = list(manifest["arms"])
+    if any("hermes" in arm for arm in manifest["arms"].values()):
+        return score_multiarm_run(
+            run_dir, by_id, manifest, effective, expected, excluded, arm_names
+        )
     records = {
         arm: _load_answers(run_dir / "raw" / f"hermes-{arm}.jsonl") for arm in ("base", "moa")
     }
@@ -239,5 +244,119 @@ def score_run(run_dir: Path) -> dict[str, Any]:
     }
     (run_dir / "scores.json").write_bytes(canonical_json(scores) + b"\n")
     (run_dir / "paired-deltas.json").write_bytes(canonical_json(deltas) + b"\n")
+    (run_dir / "summary.json").write_bytes(canonical_json(summary) + b"\n")
+    return summary
+
+
+def score_multiarm_run(
+    run_dir: Path,
+    by_id: dict[str, dict[str, Any]],
+    manifest: dict[str, Any],
+    effective: set[tuple[str, int]],
+    expected: set[tuple[str, int]],
+    excluded: set[tuple[str, int]],
+    arm_names: list[str],
+) -> dict[str, Any]:
+    baseline = str(manifest["execution_contract"]["baseline_arm"])
+    if baseline not in arm_names:
+        raise ContractError(f"baseline arm is not configured: {baseline}")
+    records = {arm: _load_answers(run_dir / "raw" / f"hermes-{arm}.jsonl") for arm in arm_names}
+    for arm, rows in records.items():
+        if set(rows) != effective:
+            raise ContractError(
+                f"{arm} answer coverage mismatch: expected {len(effective)}, got {len(rows)}"
+            )
+
+    scores: list[dict[str, Any]] = []
+    cells: list[dict[str, Any]] = []
+    values_by_arm: dict[str, list[float]] = {arm: [] for arm in arm_names}
+    task_values: dict[str, dict[str, list[float]]] = {arm: defaultdict(list) for arm in arm_names}
+    category_values: dict[str, dict[str, list[float]]] = {
+        arm: defaultdict(list) for arm in arm_names
+    }
+    for qid, sample_index in sorted(effective):
+        question = by_id[qid]
+        cell_scores: dict[str, float] = {}
+        for arm in arm_names:
+            record = records[arm][(qid, sample_index)]
+            if question["category"] == "instruction_following":
+                score = score_instruction_following(
+                    question,
+                    record,
+                    f"{arm}-{sample_index}",
+                    run_dir / "if-evaluator" / arm / str(sample_index),
+                )
+            else:
+                score = score_standard(question, answer_text(record))
+            cell_scores[arm] = score
+            values_by_arm[arm].append(score)
+            task_values[arm][qid].append(score)
+            category_values[arm][str(question["category"])].append(score)
+            scores.append(
+                {
+                    "question_id": qid,
+                    "sample_index": sample_index,
+                    "category": question["category"],
+                    "task": question["task"],
+                    "arm": arm,
+                    "score": score,
+                }
+            )
+        cells.append(
+            {
+                "question_id": qid,
+                "sample_index": sample_index,
+                "scores": cell_scores,
+                "deltas_vs_baseline": {
+                    arm: cell_scores[arm] - cell_scores[baseline]
+                    for arm in arm_names
+                    if arm != baseline
+                },
+            }
+        )
+
+    arm_means = {arm: sum(values) / len(values) for arm, values in values_by_arm.items()}
+    comparisons = {}
+    for arm in arm_names:
+        if arm == baseline:
+            continue
+        sample_deltas = [cell["deltas_vs_baseline"][arm] for cell in cells]
+        per_task_deltas = []
+        for qid in sorted(task_values[baseline]):
+            base_mean = sum(task_values[baseline][qid]) / len(task_values[baseline][qid])
+            arm_mean = sum(task_values[arm][qid]) / len(task_values[arm][qid])
+            per_task_deltas.append(arm_mean - base_mean)
+        comparisons[arm] = {
+            "absolute_delta": arm_means[arm] - arm_means[baseline],
+            "relative_delta_percent": (
+                None
+                if arm_means[baseline] == 0
+                else (arm_means[arm] - arm_means[baseline]) / arm_means[baseline] * 100
+            ),
+            "task_mean_delta": sum(per_task_deltas) / len(per_task_deltas),
+            "wins": sum(value > 0 for value in sample_deltas),
+            "ties": sum(value == 0 for value in sample_deltas),
+            "regressions": sum(value < 0 for value in sample_deltas),
+        }
+    summary = {
+        "status": "VALID_WITH_ONE_INFRA_EXCLUSION" if excluded else "VALID",
+        "baseline_arm": baseline,
+        "arms": arm_names,
+        "planned_pairs": len(expected),
+        "excluded_pairs": len(excluded),
+        "scored_pairs": len(effective),
+        "arm_means": arm_means,
+        "comparisons_vs_baseline": comparisons,
+        "category_means": {
+            arm: {
+                category: sum(values) / len(values)
+                for category, values in sorted(categories.items())
+            }
+            for arm, categories in category_values.items()
+        },
+        "scores_sha256": sha256_bytes(canonical_json(scores)),
+    }
+    (run_dir / "scores.json").write_bytes(canonical_json(scores) + b"\n")
+    (run_dir / "paired-deltas.json").write_bytes(canonical_json(cells) + b"\n")
     (run_dir / "summary.json").write_bytes(canonical_json(summary) + b"\n")
     return summary

@@ -12,8 +12,22 @@ def _text_hash(text: str) -> str:
     return sha256_bytes(text.strip().encode())
 
 
-def validate_moa_traces(run_dir: Path, expected_count: int) -> dict[str, Any]:
-    trace_dir = run_dir / "homes" / "moa" / "moa-traces"
+def validate_moa_traces(
+    run_dir: Path,
+    expected_count: int,
+    arm_name: str = "moa",
+    hermes_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    trace_dir = run_dir / "homes" / arm_name / "moa-traces"
+    preset_name = "default"
+    expected_references = [{"provider": "openrouter", "model": "minimax/minimax-m3"}]
+    expected_aggregator = {"provider": "openai-codex", "model": "gpt-5.6-sol"}
+    if hermes_config is not None:
+        moa = hermes_config.get("moa", {})
+        preset_name = str(moa.get("active_preset") or moa.get("default_preset") or "default")
+        preset = moa.get("presets", {}).get(preset_name, {})
+        expected_references = list(preset.get("reference_models") or [])
+        expected_aggregator = dict(preset.get("aggregator") or {})
     paths = sorted(trace_dir.glob("*.jsonl")) if trace_dir.is_dir() else []
     records: list[dict[str, Any]] = []
     for path in paths:
@@ -26,7 +40,7 @@ def validate_moa_traces(run_dir: Path, expected_count: int) -> dict[str, Any]:
             f"MoA trace cardinality mismatch: expected {expected_count}, got {len(records)}"
         )
 
-    answer_path = run_dir / "raw" / "hermes-moa.jsonl"
+    answer_path = run_dir / "raw" / f"hermes-{arm_name}.jsonl"
     answer_hashes: list[str] = []
     with answer_path.open(encoding="utf-8") as handle:
         for line in handle:
@@ -39,28 +53,28 @@ def validate_moa_traces(run_dir: Path, expected_count: int) -> dict[str, Any]:
     trace_output_hashes: list[str] = []
     reference_input = reference_output = 0
     for index, record in enumerate(records):
-        if record.get("preset") != "default":
+        if record.get("preset") != preset_name:
             raise ContractError(f"trace {index}: unexpected preset")
         references = record.get("references") or []
-        if len(references) != 1:
-            raise ContractError(f"trace {index}: expected exactly one reference")
-        reference = references[0]
-        if reference.get("provider") != "openrouter":
-            raise ContractError(f"trace {index}: unexpected reference provider")
-        if reference.get("model") != "minimax/minimax-m3":
-            raise ContractError(f"trace {index}: unexpected reference model")
-        if not str(reference.get("output") or "").strip():
-            raise ContractError(f"trace {index}: empty reference output")
-        usage = reference.get("usage") or {}
-        if int(usage.get("output_tokens") or 0) <= 0:
-            raise ContractError(f"trace {index}: missing reference output usage")
-        reference_input += int(usage.get("input_tokens") or 0)
-        reference_output += int(usage.get("output_tokens") or 0)
+        if len(references) != len(expected_references):
+            raise ContractError(f"trace {index}: unexpected reference count")
+        for reference, expected_reference in zip(references, expected_references, strict=True):
+            if reference.get("provider") != expected_reference.get("provider"):
+                raise ContractError(f"trace {index}: unexpected reference provider")
+            if reference.get("model") != expected_reference.get("model"):
+                raise ContractError(f"trace {index}: unexpected reference model")
+            if not str(reference.get("output") or "").strip():
+                raise ContractError(f"trace {index}: empty reference output")
+            usage = reference.get("usage") or {}
+            if int(usage.get("output_tokens") or 0) <= 0:
+                raise ContractError(f"trace {index}: missing reference output usage")
+            reference_input += int(usage.get("input_tokens") or 0)
+            reference_output += int(usage.get("output_tokens") or 0)
 
         aggregator = record.get("aggregator") or {}
-        if aggregator.get("provider") != "openai-codex":
+        if aggregator.get("provider") != expected_aggregator.get("provider"):
             raise ContractError(f"trace {index}: unexpected aggregator provider")
-        if aggregator.get("model") != "gpt-5.6-sol":
+        if aggregator.get("model") != expected_aggregator.get("model"):
             raise ContractError(f"trace {index}: unexpected aggregator model")
         output = str(aggregator.get("output") or "")
         if not output.strip():
@@ -73,14 +87,15 @@ def validate_moa_traces(run_dir: Path, expected_count: int) -> dict[str, Any]:
     audit = {
         "status": "valid",
         "trace_records": len(records),
-        "reference_calls": len(records),
-        "reference_provider": "openrouter",
-        "reference_model": "minimax/minimax-m3",
+        "arm": arm_name,
+        "reference_calls": len(records) * len(expected_references),
+        "reference_models": expected_references,
         "reference_input_tokens": reference_input,
         "reference_output_tokens": reference_output,
-        "aggregator_provider": "openai-codex",
-        "aggregator_model": "gpt-5.6-sol",
+        "aggregator_provider": expected_aggregator.get("provider"),
+        "aggregator_model": expected_aggregator.get("model"),
         "answer_trace_hashes_match": True,
     }
-    (run_dir / "trace-audit.json").write_bytes(canonical_json(audit) + b"\n")
+    audit_name = "trace-audit.json" if arm_name == "moa" else f"trace-audit-{arm_name}.json"
+    (run_dir / audit_name).write_bytes(canonical_json(audit) + b"\n")
     return audit

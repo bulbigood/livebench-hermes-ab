@@ -1,83 +1,308 @@
-# LiveBench Hermes A/B
+# LiveBench Hermes multi-arm harness
 
-Paired evaluation project comparing:
+Reproducible, objective LiveBench comparisons for independently configured [Hermes Agent](https://hermes-agent.nousresearch.com/) arms.
 
-- **BASE:** Hermes Agent with `openai-codex:gpt-5.6-sol`, reasoning `low`.
-- **MoA:** Hermes preset `default`: the same `gpt-5.6-sol low` aggregator plus `openrouter:minimax/minimax-m3`.
+The default experiment compares a plain Hermes arm with a Mixture-of-Agents (MoA) arm on a frozen 15-task cohort:
 
-Prompts, questions, turn handling, output limits, arm order policy, and objective scoring are shared. Only MoA reference context changes.
+- 5 Instruction Following tasks;
+- 5 Reasoning tasks;
+- 5 Data Analysis tasks;
+- 5 stochastic samples per task;
+- 75 cells per arm.
 
-LiveBench is pinned in [`upstream`](upstream) at commit `00eae856aa1c1a9e9d058a65a9a94d85884034c4`.
+LiveBench is pinned as a Git submodule at commit `00eae856aa1c1a9e9d058a65a9a94d85884034c4`. Historical YAML contracts and reports remain in `config/` and `reports/`; `config.yaml` is the supported user-facing configuration.
 
-## Setup
+## Execution model
 
-The repository is already prepared. To recreate the environment and public question data:
+Every configured arm gets:
+
+- one sequential worker;
+- an isolated local `HERMES_HOME`;
+- its own `config.yaml`, `.env`, state, sessions, MoA traces, and answer JSONL.
+
+All arms for one `(question_id, sample_index)` run concurrently. The next cell starts only after every arm finishes. This keeps cells within an arm sequential while aligning competing arms in time. Adding a third arm creates a third worker; it does not add within-arm concurrency.
+
+Model calls can cost money. `prepare` is deterministic and makes no model calls. Always inspect its `expected_model_calls` output before `run`.
+
+## Requirements
+
+- Linux or macOS;
+- Python 3.11+;
+- [`uv`](https://docs.astral.sh/uv/);
+- Git with submodule support;
+- Hermes Agent installed and configured. This repository is tested with Hermes Agent `0.19.1`.
+
+Verify the local tools:
 
 ```bash
-uv sync --extra test --extra livebench
-PYTHONPATH=upstream uv run --extra livebench python upstream/livebench/download_questions.py
-NLTK_DATA=$HOME/.cache/nltk_data uv run --extra livebench python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
-uv run livebench-hermes-ab prepare --run-dir runs/smoke
+hermes --version
+hermes config check
+uv --version
 ```
 
-`prepare` makes no model calls. It verifies the upstream SHA, freezes question/config hashes, creates isolated Hermes homes, and writes `runs/smoke/manifest.json`.
+Clone and install:
 
-The smoke selection is blind and deterministic: one demanding question each from math, reasoning, data analysis, language, and instruction following.
+```bash
+git clone --recurse-submodules <repository-url>
+cd livebench-hermes-ab
+uv sync --extra test --extra livebench
+```
+
+If the repository was cloned without submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+Download the public LiveBench questions and NLTK resources:
+
+```bash
+PYTHONPATH=upstream uv run --extra livebench python upstream/livebench/download_questions.py
+NLTK_DATA="$HOME/.cache/nltk_data" uv run --extra livebench python - <<'PY'
+import nltk
+nltk.download("punkt")
+nltk.download("punkt_tab")
+PY
+```
+
+`data/` and `runs/` are ignored by Git.
+
+## Configure Hermes arms
+
+The root [`config.yaml`](config.yaml) has two layers.
+
+### Harness-owned sections
+
+- `experiment`: immutable experiment identity, upstream revision, release, seed, and question paths.
+- `selection`: exact frozen question IDs and expected category/family composition.
+- `generation`: samples, retries, and per-Hermes-process timeout.
+- `execution`: baseline arm and concurrency policy.
+- `scoring`: local objective scorer declaration.
+- `arms.<name>.credential_env`: names of environment variables allowed in that arm.
+
+### Hermes-owned section
+
+`arms.<name>.hermes` is an ordinary Hermes YAML configuration tree. The harness serializes this tree directly to:
+
+```text
+runs/<run>/homes/<name>/config.yaml
+```
+
+It does not rename model, reasoning, MoA, or provider fields and does not apply hidden model overrides. Generated semantic YAML is tested against the source subtree for exact equality.
+
+Example plain arm:
+
+```yaml
+arms:
+  base:
+    credential_env: []
+    hermes:
+      model:
+        provider: openai-codex
+        default: gpt-5.6-sol
+      agent:
+        reasoning_effort: medium
+        disabled_toolsets: [web, browser, terminal, file, memory]
+      moa:
+        enabled: false
+        save_traces: false
+```
+
+Example MoA arm:
+
+```yaml
+  moa:
+    credential_env: [OPENROUTER_API_KEY]
+    hermes:
+      model:
+        provider: moa
+        default: default
+      agent:
+        reasoning_effort: medium
+      moa:
+        enabled: true
+        default_preset: default
+        active_preset: default
+        save_traces: true
+        presets:
+          default:
+            enabled: true
+            degraded_reference_policy: loud
+            fanout: every_n:3
+            reference_models:
+              - provider: openrouter
+                model: minimax/minimax-m3
+            aggregator:
+              provider: openai-codex
+              model: gpt-5.6-sol
+              reasoning_effort: medium
+```
+
+Consult the current [Hermes configuration reference](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/) when adding keys. Support depends on the installed Hermes version.
+
+### Add another arm
+
+Copy any `arms.<name>` block and give it a unique alphanumeric, hyphenated, or underscored name. For example, duplicate `moa` as `moa-low`, then change only:
+
+```yaml
+arms:
+  moa-low:
+    credential_env: [OPENROUTER_API_KEY]
+    hermes:
+      agent:
+        reasoning_effort: low
+      # Copy the complete moa tree and set its aggregator reasoning_effort to low.
+```
+
+The complete Hermes subtree is required; YAML inheritance or an implicit BASE merge is deliberately not provided. Explicit configs are repetitive, but reproducible repetition beats an invisible treatment.
+
+Set `execution.baseline_arm` to the arm against which all other arms are reported. `execution.workers_per_arm` must remain `1`.
+
+## Credentials
+
+Never put credential values in `config.yaml`.
+
+- OAuth-backed providers use the existing `auth.json` from `--source-hermes-home` (default: `~/.hermes`). Generated homes receive a symlink to that file.
+- API-key arms list only required variable names in `credential_env`.
+- Values are resolved from the process environment, the source Hermes `.env`, or `/etc/environment`.
+- Each generated arm `.env` contains only its allowlisted variables and has mode `0600`.
+- Hermes child processes have inherited key/token/secret/password variables removed before the arm-specific `.env` is loaded.
+- A missing allowlisted credential fails during `prepare`.
+
+Examples:
+
+```bash
+export OPENROUTER_API_KEY='...'
+hermes auth add openai-codex
+```
+
+The default BASE arm gets no API-key environment variables. Static LiveBench prompts do not need tools, so the default Hermes configs disable all bundled toolsets and execution uses `--ignore-rules`.
+
+## Prepare and audit
+
+Use a fresh run directory:
+
+```bash
+uv run livebench-hermes-ab --config config.yaml prepare \
+  --run-dir runs/targeted-15x5
+```
+
+Inspect at least:
+
+- `task_count`, `samples_per_task`, and `paired_units`;
+- `expected_model_calls.by_arm` and `expected_model_calls.total`;
+- `execution_contract`;
+- `home_config_sha256`;
+- `selection.question_ids` and category counts.
+
+The default config prepares 75 BASE calls, 75 MoA aggregator calls, and 75 reference calls: 225 model calls total and zero judge calls.
+
+Verify a generated Hermes home without making a model call:
+
+```bash
+HERMES_HOME="$PWD/runs/targeted-15x5/homes/base" hermes config get model.provider
+HERMES_HOME="$PWD/runs/targeted-15x5/homes/moa" hermes config get moa.active_preset
+```
+
+`prepare` fails closed on upstream drift, unavailable question IDs, category/family cardinality changes, missing credentials, invalid arm names, or invalid worker counts.
 
 ## Run
 
 ```bash
-uv run livebench-hermes-ab run --run-dir runs/smoke
+uv run livebench-hermes-ab --config config.yaml run \
+  --run-dir runs/targeted-15x5
 ```
 
-The five-question smoke performs:
+The runner rejects non-empty answer files. It verifies the frozen config, selected questions, and generated Hermes configs before every cell. A failed arm fails the cell and the run; completed data remains available for diagnosis but cannot be scored as complete unless an explicitly supported amendment applies.
 
-- 5 BASE calls;
-- 5 Minimax reference calls;
-- 5 MoA aggregator calls;
-- 15 model calls total.
+For diagnostics, one configured arm can be run sequentially:
 
-`every_n:3` refreshes references on the first iteration of every user turn; tools are disabled, so each one-turn question gets exactly one reference fanout.
+```bash
+uv run livebench-hermes-ab --config config.yaml run-arm \
+  --arm moa --run-dir runs/moa-diagnostic
+```
 
-The run also requires five full MoA traces. It fails closed unless each Minimax reference is non-empty, has positive token usage, and each aggregator output hash-matches its saved answer.
-
-Use a fresh run directory for every execution. Existing answer files are rejected to prevent duplicate or mixed pairs.
+Do not combine independently generated diagnostic arms into a causal comparison unless prompts, cells, reference bytes, and execution conditions match.
 
 ## Score
 
 ```bash
-uv run livebench-hermes-ab score --run-dir runs/smoke
-uv run python scripts/build_report.py --run runs/smoke --output reports
+uv run livebench-hermes-ab --config config.yaml score \
+  --run-dir runs/targeted-15x5
 ```
 
-Scoring is local and deterministic. The wrapper lazy-loads the task-specific processors from the pinned LiveBench checkout and makes no judge-model calls.
+Scoring is local and deterministic. It uses the pinned LiveBench objective processors and no judge-model calls.
 
-Outputs:
+Outputs include:
 
 ```text
-runs/smoke/raw/hermes-base.jsonl
-runs/smoke/raw/hermes-moa.jsonl
-runs/smoke/scores.json
-runs/smoke/summary.json
+runs/targeted-15x5/manifest.json
+runs/targeted-15x5/questions.json
+runs/targeted-15x5/raw/hermes-<arm>.jsonl
+runs/targeted-15x5/scores.json
+runs/targeted-15x5/paired-deltas.json
+runs/targeted-15x5/summary.json
+runs/targeted-15x5/trace-audit.json
+runs/targeted-15x5/trace-audit-<additional-moa-arm>.json
 ```
 
-## Isolation
+`summary.json` reports:
 
-Each arm receives an isolated `HERMES_HOME` and runs with `--ignore-rules`. Every built-in toolset is disabled in the isolated config; offline `hermes prompt-size --json` must report zero tool schemas.
+- mean score for every arm;
+- absolute and relative delta against `baseline_arm`;
+- task-balanced mean delta;
+- wins, ties, and regressions on the common cell intersection;
+- category means for every arm.
 
-- Both arms use the existing OpenAI Codex OAuth `auth.json` through a read-only symlink.
-- BASE receives an empty `.env` and cannot access OpenRouter credentials.
-- MoA receives a private `0600` `.env` containing only `OPENROUTER_API_KEY`.
-- Telegram, GitHub, memory, skills, repository instructions, tools, and unrelated credentials are excluded.
-- `runs/`, `data/`, credentials, and generated answers are ignored by Git.
+Relative improvement is `N/A` (`null` in JSON) when the baseline mean is zero.
 
-## Fail-closed gates
+## MoA trace validation
 
-- Exact upstream commit and experiment hashes.
-- BASE and MoA aggregator must match provider/model/reasoning.
-- Minimax M3 is the only reference model.
-- `degraded_reference_policy: loud` rejects failed references.
-- Full MoA traces prove exact reference cardinality, model identity, positive usage, and aggregator-output matching.
-- Stable pair IDs and alternating arm order.
-- Byte-identical prompt construction across arms.
-- Incomplete or duplicate answer cells cannot be scored.
+Every arm whose active Hermes MoA preset has reference models is validated independently. Validation requires:
+
+- one trace per completed benchmark cell;
+- the configured preset and reference cardinality;
+- exact reference provider/model identities;
+- non-empty reference outputs and positive output-token usage;
+- exact aggregator provider/model identity;
+- aggregator output hashes matching persisted answers.
+
+`degraded_reference_policy: loud` is recommended. A fallback without valid reference evidence is not silently accepted.
+
+## Reproducibility boundaries
+
+The manifest freezes source/config/question hashes and model-call scope. It cannot freeze external provider behavior, model revisions behind mutable names, network conditions, quotas, or pricing.
+
+Parallel execution is an execution condition, not a model treatment. Concurrent arms may change latency and throttling compared with historical sequential runs. Report wall-clock makespan separately from summed and per-cell latency.
+
+Do not report USD cost unless provider prices and complete token telemetry are available. Historical OpenAI Codex responses may not expose complete token accounting.
+
+## Development and verification
+
+```bash
+uv run pytest -q
+uv run ruff check src tests scripts
+uv build
+git diff --check
+```
+
+A no-cost publication preflight is:
+
+```bash
+rm -rf runs/publication-preflight
+uv run livebench-hermes-ab --config config.yaml prepare \
+  --run-dir runs/publication-preflight
+```
+
+## Repository contents
+
+- `config.yaml`: supported multi-arm configuration.
+- `config/`: immutable historical experiment contracts.
+- `reports/`: historical evidence and targeted scenario-selection rationale.
+- `src/livebench_hermes_ab/`: runner, scoring, and trace validation.
+- `tests/`: deterministic contract tests.
+- `upstream/`: pinned LiveBench submodule.
+
+## License
+
+The harness code is released under the [MIT License](LICENSE). The pinned LiveBench submodule and downloaded benchmark data retain their own upstream licenses and terms.
