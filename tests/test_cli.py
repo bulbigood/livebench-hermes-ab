@@ -71,10 +71,11 @@ def test_configure_homes_minimizes_credentials(tmp_path: Path):
     assert "terminal" in disabled and "web" in disabled and "memory" in disabled
 
 
-def test_pair_invocation_runs_one_worker_per_arm_concurrently(tmp_path: Path):
-    barrier = threading.Barrier(2)
-    active = {"base": 0, "moa": 0}
-    peak = {"base": 0, "moa": 0}
+def test_wave_invocation_runs_one_worker_per_arm_concurrently(tmp_path: Path):
+    arm_names = ("base", "moa_minimax", "moa_mimo")
+    barrier = threading.Barrier(len(arm_names))
+    active = dict.fromkeys(arm_names, 0)
+    peak = dict.fromkeys(arm_names, 0)
     lock = threading.Lock()
 
     def fake_invoke(arm_name, arm, home, question, timeout, *, executable):
@@ -89,16 +90,16 @@ def test_pair_invocation_runs_one_worker_per_arm_concurrently(tmp_path: Path):
         return {"turns": [arm_name], "total_time_s": 0.01, "stdout_sha256": arm_name}
 
     result = invoke_pair_parallel(
-        arms={"base": {}, "moa": {}},
-        homes={"base": tmp_path / "base", "moa": tmp_path / "moa"},
+        arms={arm_name: {} for arm_name in arm_names},
+        homes={arm_name: tmp_path / arm_name for arm_name in arm_names},
         question={"question_id": "q1", "turns": ["prompt"]},
         timeout=30,
         executable="/project/hermes",
         invoke=fake_invoke,
     )
 
-    assert set(result) == {"base", "moa"}
-    assert peak == {"base": 1, "moa": 1}
+    assert set(result) == set(arm_names)
+    assert peak == dict.fromkeys(arm_names, 1)
 
 
 def test_paired_arm_contract_rejects_more_than_one_worker_per_arm():

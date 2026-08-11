@@ -5,9 +5,10 @@ Compare multiple [Hermes Agent](https://hermes-agent.nousresearch.com/) configur
 The default experiment compares:
 
 - `base`: plain Hermes using OpenAI Codex;
-- `moa`: the same aggregator plus an OpenRouter reference model.
+- `moa_minimax`: the same aggregator plus `minimax/minimax-m3` through OpenRouter;
+- `moa_mimo`: the same aggregator plus `xiaomi/mimo-v2.5` through OpenRouter.
 
-It runs 15 tasks × 5 samples = **75 cells per arm**. The default configuration expects **225 model calls in total**. Model calls may cost money.
+It runs 15 tasks × 5 samples = **75 cells per arm**. The three arms produce **225 arm-cell invocations**. Including one reference call for each MoA cell, the default configuration expects **375 provider model calls in total**. Model calls may cost money.
 
 > **Safe rule:** always run `prepare` first. It makes no model calls and prints the exact planned call count. Run `run` only after checking that output.
 
@@ -62,7 +63,7 @@ The default `base` arm uses your existing OpenAI Codex OAuth login:
 "$HERMES" auth add openai-codex
 ```
 
-The default `moa` arm also needs an OpenRouter API key:
+The default `moa_minimax` and `moa_mimo` arms also need an OpenRouter API key:
 
 ```bash
 export OPENROUTER_API_KEY='your-key-here'
@@ -116,7 +117,7 @@ print(json.dumps(manifest["expected_model_calls"], indent=2))
 PY
 ```
 
-For the unchanged default config, the total should be `225`. Stop here if the arms, scenarios, or call count are not what you intended.
+For the unchanged default config, `expected_cells` should be `225` and `expected_model_calls.total` should be `375`. Stop here if the arms, scenarios, or call count are not what you intended.
 
 ### 6. Run the benchmark — this makes model calls
 
@@ -231,7 +232,7 @@ Then export the value before `prepare` and `run`:
 export OPENROUTER_API_KEY='your-key-here'
 ```
 
-For MoA arms, reference models and aggregator settings live inside that arm's `hermes.moa` tree. Use the complete `moa` block in [`config.yaml`](config.yaml) as the template. See [Arm configuration](docs/configuration.md#arms) for the full contract.
+For MoA arms, reference models and aggregator settings live inside that arm's `hermes.moa` tree. Use the complete `moa_minimax` or `moa_mimo` block in [`config.yaml`](config.yaml) as the template. See [Arm configuration](docs/configuration.md#arms) for the full contract.
 
 ### 4. Choose the shared scenarios
 
