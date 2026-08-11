@@ -7,7 +7,11 @@ from livebench_hermes_ab.core import ContractError
 from livebench_hermes_ab.trace_validation import validate_moa_traces
 
 
-def make_run(tmp_path: Path, reference_output_tokens: int = 2) -> Path:
+def make_run(
+    tmp_path: Path,
+    reference_output_tokens: int = 2,
+    reference_output: str = "advice",
+) -> Path:
     run = tmp_path / "run"
     (run / "raw").mkdir(parents=True)
     trace_dir = run / "homes/moa/moa-traces"
@@ -23,7 +27,7 @@ def make_run(tmp_path: Path, reference_output_tokens: int = 2) -> Path:
             {
                 "provider": "openrouter",
                 "model": "minimax/minimax-m3",
-                "output": "advice",
+                "output": reference_output,
                 "usage": {"input_tokens": 3, "output_tokens": reference_output_tokens},
             }
         ],
@@ -47,3 +51,9 @@ def test_trace_validator_accepts_complete_reference_and_matching_answer(tmp_path
 def test_trace_validator_rejects_missing_reference_usage(tmp_path: Path):
     with pytest.raises(ContractError, match="missing reference output usage"):
         validate_moa_traces(make_run(tmp_path, reference_output_tokens=0), expected_count=1)
+
+
+def test_trace_validator_rejects_hermes_empty_response_sentinel(tmp_path: Path):
+    run = make_run(tmp_path, reference_output="(empty response)", reference_output_tokens=10_000)
+    with pytest.raises(ContractError, match="degraded reference output"):
+        validate_moa_traces(run, expected_count=1)

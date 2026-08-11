@@ -63,8 +63,11 @@ def validate_moa_traces(
                 raise ContractError(f"trace {index}: unexpected reference provider")
             if reference.get("model") != expected_reference.get("model"):
                 raise ContractError(f"trace {index}: unexpected reference model")
-            if not str(reference.get("output") or "").strip():
+            reference_output_text = str(reference.get("output") or "").strip()
+            if not reference_output_text:
                 raise ContractError(f"trace {index}: empty reference output")
+            if reference_output_text.casefold() == "(empty response)":
+                raise ContractError(f"trace {index}: degraded reference output")
             usage = reference.get("usage") or {}
             if int(usage.get("output_tokens") or 0) <= 0:
                 raise ContractError(f"trace {index}: missing reference output usage")

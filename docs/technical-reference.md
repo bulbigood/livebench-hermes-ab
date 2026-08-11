@@ -108,7 +108,7 @@ uv run livebench-hermes-ab --config config.yaml score \
   --run-dir runs/example
 ```
 
-Scoring is local and deterministic. It uses pinned LiveBench objective processors and makes no judge-model calls.
+Scoring is local and deterministic. It uses pinned LiveBench objective processors and makes no judge-model calls. It revalidates persisted MoA traces before computing scores, so an older or stale trace audit cannot bypass the current validation contract.
 
 Compatibility warnings are copied from `manifest.json` into `summary.json`. A complete run made with a mismatched Hermes version is labeled `VALID_WITH_HERMES_WARNING`; objective scores remain available, but the result is not presented as a verified reproduction.
 
@@ -144,7 +144,7 @@ Every configured MoA arm with reference models is validated independently. Valid
 - one trace per completed cell;
 - expected preset and reference cardinality;
 - exact reference provider/model identities;
-- non-empty reference outputs and positive output-token usage;
+- substantive reference outputs and positive output-token usage; the Hermes `(empty response)` sentinel is rejected as degraded evidence;
 - exact aggregator provider/model identity;
 - aggregator output hashes matching persisted answers.
 

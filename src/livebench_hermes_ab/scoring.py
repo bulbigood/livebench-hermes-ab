@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import ContractError, canonical_json, sha256_bytes
+from .trace_validation import validate_moa_traces
 
 
 def summary_status(manifest: dict[str, Any], excluded: bool) -> str:
@@ -171,6 +172,16 @@ def score_run(run_dir: Path) -> dict[str, Any]:
     questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
     by_id = {str(q["question_id"]): q for q in questions}
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    for arm_name, arm in manifest["arms"].items():
+        hermes_config = arm.get("hermes") if isinstance(arm, dict) else None
+        moa_config = hermes_config.get("moa", {}) if isinstance(hermes_config, dict) else {}
+        if moa_config.get("enabled") is True:
+            validate_moa_traces(
+                run_dir,
+                expected_count=len(manifest["pairs"]),
+                arm_name=str(arm_name),
+                hermes_config=hermes_config,
+            )
     expected = {(str(p["question_id"]), int(p["sample_index"])) for p in manifest["pairs"]}
     amendment_path = run_dir / "run-amendment.json"
     excluded: set[tuple[str, int]] = set()
