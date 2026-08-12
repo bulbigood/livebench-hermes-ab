@@ -74,59 +74,213 @@ def test_balanced_wave_timing_has_no_marker():
     assert timing["paired_wall_time_comparable"] is True
 
 
-def test_score_run_revalidates_persisted_moa_traces(tmp_path: Path):
+def test_score_run_revalidates_persisted_moa_traces_and_excludes_degraded_cell(
+    tmp_path: Path,
+):
     run = tmp_path / "run"
     (run / "raw").mkdir(parents=True)
     trace_dir = run / "homes/moa/moa-traces"
     trace_dir.mkdir(parents=True)
-    (run / "questions.json").write_text("[]")
-    manifest = {
-        "pairs": [{"question_id": "q1", "sample_index": 0}],
-        "arms": {
-            "moa": {
-                "hermes": {
-                    "moa": {
-                        "enabled": True,
-                        "active_preset": "default",
-                        "presets": {
-                            "default": {
-                                "reference_models": [
-                                    {
-                                        "provider": "openrouter",
-                                        "model": "minimax/minimax-m3",
-                                    }
-                                ],
-                                "aggregator": {
-                                    "provider": "openai-codex",
-                                    "model": "gpt-5.6-sol",
-                                },
-                            }
-                        },
-                    }
+    questions = [
+        {"question_id": "q1", "category": "reasoning", "task": "cta", "ground_truth": "a"},
+        {"question_id": "q2", "category": "reasoning", "task": "cta", "ground_truth": "b"},
+    ]
+    (run / "questions.json").write_text(json.dumps(questions))
+    hermes = {
+        "moa": {
+            "enabled": True,
+            "active_preset": "default",
+            "presets": {
+                "default": {
+                    "reference_models": [{"provider": "openrouter", "model": "minimax/minimax-m3"}],
+                    "aggregator": {
+                        "provider": "openai-codex",
+                        "model": "gpt-5.6-sol",
+                    },
                 }
-            }
+            },
+        }
+    }
+    manifest = {
+        "pairs": [
+            {"pair_id": "p1", "question_id": "q1", "sample_index": 0},
+            {"pair_id": "p2", "question_id": "q2", "sample_index": 0},
+        ],
+        "arms": {"moa": {"hermes": hermes}},
+        "execution_contract": {
+            "baseline_arm": "moa",
+            "scheduling": "streaming",
+            "timing_comparable": False,
         },
+        "hermes_compatibility": {"status": "verified"},
     }
     (run / "manifest.json").write_text(json.dumps(manifest))
-    answer = {"choices": [{"turns": ["answer"]}]}
-    (run / "raw/hermes-moa.jsonl").write_text(json.dumps(answer) + "\n")
-    trace = {
+    records = [_record("q1", "p1", "a"), _record("q2", "p2", "b")]
+    (run / "raw/hermes-moa.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records)
+    )
+
+    def trace(reference_output: str, aggregate_output: str) -> dict:
+        return {
+            "preset": "default",
+            "references": [
+                {
+                    "provider": "openrouter",
+                    "model": "minimax/minimax-m3",
+                    "output": reference_output,
+                    "usage": {"input_tokens": 1, "output_tokens": 10_000},
+                }
+            ],
+            "aggregator": {
+                "provider": "openai-codex",
+                "model": "gpt-5.6-sol",
+                "output": aggregate_output,
+            },
+        }
+
+    (trace_dir / "p1-0.jsonl").write_text(json.dumps(trace("reference", "a")) + "\n")
+    (trace_dir / "p2-0.jsonl").write_text(json.dumps(trace("(empty response)", "b")) + "\n")
+
+    summary = score_run(run)
+
+    assert summary["status"] == "VALID_WITH_EXCLUSIONS"
+    assert summary["common_valid_pairs"] == 1
+    assert summary["exclusions"] == [
+        {
+            "arm": "moa",
+            "pair_id": "p2",
+            "question_id": "q2",
+            "sample_index": 0,
+            "code": "INVALID_MOA_TRACE",
+            "reason": "degraded reference output",
+        }
+    ]
+
+
+def _record(qid: str, pair_id: str, answer: str) -> dict:
+    return {
+        "question_id": qid,
+        "sample_index": 0,
+        "choices": [{"turns": [answer]}],
+        "api_info": {"pair_id": pair_id},
+        "total_time_s": 1.0,
+    }
+
+
+def _write_two_arm_fixture(run: Path) -> None:
+    (run / "raw").mkdir(parents=True)
+    questions = [
+        {"question_id": "q1", "category": "reasoning", "task": "cta", "ground_truth": "a"},
+        {"question_id": "q2", "category": "reasoning", "task": "cta", "ground_truth": "b"},
+    ]
+    manifest = {
+        "pairs": [
+            {"pair_id": "p1", "question_id": "q1", "sample_index": 0},
+            {"pair_id": "p2", "question_id": "q2", "sample_index": 0},
+        ],
+        "arms": {
+            "base": {"hermes": {"moa": {"enabled": False}}},
+            "treatment": {"hermes": {"moa": {"enabled": False}}},
+        },
+        "execution_contract": {
+            "baseline_arm": "base",
+            "scheduling": "streaming",
+            "timing_comparable": False,
+        },
+        "hermes_compatibility": {"status": "verified"},
+    }
+    (run / "questions.json").write_text(json.dumps(questions))
+    (run / "manifest.json").write_text(json.dumps(manifest))
+    (run / "raw/hermes-base.jsonl").write_text(
+        json.dumps(_record("q1", "p1", "a")) + "\n" + json.dumps(_record("q2", "p2", "b")) + "\n"
+    )
+    (run / "raw/hermes-treatment.jsonl").write_text(json.dumps(_record("q1", "p1", "a")) + "\n")
+
+
+def test_multiarm_scoring_uses_common_valid_coverage_and_reports_exclusions(tmp_path: Path):
+    run = tmp_path / "run"
+    _write_two_arm_fixture(run)
+    exclusions = {
+        "schema_version": 1,
+        "excluded_cells": [
+            {
+                "arm": "treatment",
+                "pair_id": "p2",
+                "question_id": "q2",
+                "sample_index": 0,
+                "code": "CELL_TIMEOUT",
+                "reason": "timed out after 1800 seconds",
+            }
+        ],
+    }
+    (run / "exclusions.json").write_text(json.dumps(exclusions))
+
+    summary = score_run(run)
+
+    assert summary["status"] == "VALID_WITH_EXCLUSIONS"
+    assert summary["planned_cells"] == 4
+    assert summary["valid_cells"] == 3
+    assert summary["excluded_cells"] == 1
+    assert summary["planned_pairs"] == 2
+    assert summary["common_valid_pairs"] == 1
+    assert summary["paired_coverage_fraction"] == 0.5
+    assert summary["arm_coverage"]["base"]["valid_cells"] == 2
+    assert summary["arm_coverage"]["treatment"]["valid_cells"] == 1
+
+
+def test_multiarm_scoring_rejects_unexplained_missing_cell(tmp_path: Path):
+    run = tmp_path / "run"
+    _write_two_arm_fixture(run)
+
+    with pytest.raises(ContractError, match="unexplained missing cells"):
+        score_run(run)
+
+
+def test_malformed_moa_trace_is_an_explicit_cell_exclusion(tmp_path: Path):
+    run = tmp_path / "run"
+    _write_two_arm_fixture(run)
+    (run / "raw/hermes-treatment.jsonl").write_text(
+        json.dumps(_record("q1", "p1", "a")) + "\n" + json.dumps(_record("q2", "p2", "b")) + "\n"
+    )
+    manifest = json.loads((run / "manifest.json").read_text())
+    hermes = {
+        "moa": {
+            "enabled": True,
+            "active_preset": "default",
+            "presets": {
+                "default": {
+                    "reference_models": [{"provider": "openrouter", "model": "minimax/minimax-m3"}],
+                    "aggregator": {"provider": "openai-codex", "model": "gpt-5.6-sol"},
+                }
+            },
+        }
+    }
+    manifest["arms"]["treatment"]["hermes"] = hermes
+    (run / "manifest.json").write_text(json.dumps(manifest))
+    trace_dir = run / "homes/treatment/moa-traces"
+    trace_dir.mkdir(parents=True)
+    (trace_dir / "p1-0.jsonl").write_text("{broken\n")
+    valid_trace = {
         "preset": "default",
         "references": [
             {
                 "provider": "openrouter",
                 "model": "minimax/minimax-m3",
-                "output": "(empty response)",
-                "usage": {"input_tokens": 1, "output_tokens": 10_000},
+                "output": "reference",
+                "usage": {"input_tokens": 1, "output_tokens": 2},
             }
         ],
         "aggregator": {
             "provider": "openai-codex",
             "model": "gpt-5.6-sol",
-            "output": "answer",
+            "output": "b",
         },
     }
-    (trace_dir / "s.jsonl").write_text(json.dumps(trace) + "\n")
+    (trace_dir / "p2-0.jsonl").write_text(json.dumps(valid_trace) + "\n")
 
-    with pytest.raises(ContractError, match="degraded reference output"):
-        score_run(run)
+    summary = score_run(run)
+
+    assert summary["common_valid_pairs"] == 1
+    assert summary["exclusions"][0]["pair_id"] == "p1"
+    assert summary["exclusions"][0]["code"] == "INVALID_MOA_TRACE"
+    assert "malformed trace JSON" in summary["exclusions"][0]["reason"]

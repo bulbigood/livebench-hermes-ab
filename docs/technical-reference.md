@@ -40,6 +40,12 @@ uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" ru
 
 The default `streaming` mode submits the complete arm-cell matrix to a bounded worker pool. A free worker immediately starts the next cell; slow arms do not hold idle slots behind a pair barrier. Automatic concurrency is `min(CPU count × 4, 32)` and may be overridden with `--workers 1..32`.
 
+Each worker atomically persists a terminal outcome before returning. Valid outcomes contain the original answer record. Excluded outcomes contain the frozen cell identity plus a reason code and diagnostic. Consolidation writes deterministic per-arm JSONL and `exclusions.json`; a later cell failure cannot erase earlier paid results.
+
+Scoring validates every persisted cell independently. Arm-local descriptive coverage may differ, but paired aggregates use only the common valid intersection across all configured arms. Any missing cell without a declared exclusion is a contract error. Run-level integrity failures are never downgraded to exclusions.
+
+Hermes 0.19.1 MoA traces contain usage and final trace timestamps, but no reference-call start, completion, or duration fields. Consequently, full MoA cell timing is reported separately and marked as non-reference-phase timing.
+
 For synchronized timing, pass `--balanced-waves`. Each wave contains as many complete counterbalanced arm groups as fit in the worker budget, starts them behind an explicit barrier, and waits for the complete wave before continuing:
 
 ```text
@@ -60,7 +66,7 @@ Properties:
 
 Parallelism is an execution condition, not a model treatment. It may affect latency, throttling, or provider scheduling.
 
-Before each invocation, the runner verifies frozen config, selected questions, and generated Hermes config hashes. Non-empty answer files are rejected rather than overwritten. A failed arm fails the run. Completed records are consolidated in manifest order rather than concurrent completion order.
+Before each invocation, the runner verifies frozen config, selected questions, and generated Hermes config hashes. Every terminal cell outcome is written atomically before run-level consolidation. A timeout or known model/provider failure becomes a reason-coded cell exclusion; an unexpected harness exception still fails the run, while completed journals remain durable. Records and exclusions are consolidated in manifest order rather than concurrent completion order.
 
 The absolute Hermes executable recorded during `prepare` is also used for every model call. This prevents probing one installation and accidentally executing another from `PATH`.
 
@@ -84,7 +90,13 @@ Concurrent cells do not share writable Hermes homes. Each cell clones its arm's 
 - MoA trace directories;
 - credential allowlists.
 
-The coordinator writes answer JSONL only after collecting worker results, so workers do not concurrently append to the same file. Per-cell MoA traces are copied into the arm aggregate trace directory with pair-scoped names before validation.
+Workers write unique atomic outcome journals rather than concurrently appending shared JSONL. The coordinator deterministically consolidates those journals after draining workers. Per-cell MoA traces are copied into the arm aggregate trace directory with pair-scoped names before validation.
+
+`resume` validates the frozen journal schema, config and generated-home hashes, selected questions,
+arm definitions, and the complete Hermes compatibility probe. It executes only cells without a
+terminal outcome. `resume --retry-excluded` additionally retries only `CELL_TIMEOUT`,
+`MODEL_OR_PROVIDER_FAILURE`, and locally invalid/degraded MoA traces. It archives previous attempts
+before replacement and refuses runs created before durable cell journals were introduced.
 
 ## Output files
 
@@ -95,6 +107,9 @@ runs/<run>/manifest.json
 runs/<run>/questions.json
 runs/<run>/homes/<arm>/config.yaml
 runs/<run>/cell-homes/<arm>/<pair-id>/
+runs/<run>/cells/<arm>/<pair-id>.json
+runs/<run>/attempts/<arm>/<pair-id>/<attempt>-previous/
+runs/<run>/exclusions.json
 runs/<run>/raw/hermes-<arm>.jsonl
 runs/<run>/scores.json
 runs/<run>/paired-deltas.json

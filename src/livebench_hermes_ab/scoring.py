@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import ContractError, canonical_json, sha256_bytes
-from .trace_validation import validate_moa_traces
+from .trace_validation import validate_moa_trace_record
 
 
 def summary_status(manifest: dict[str, Any], excluded: bool) -> str:
@@ -201,16 +201,6 @@ def score_run(run_dir: Path) -> dict[str, Any]:
     questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
     by_id = {str(q["question_id"]): q for q in questions}
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    for arm_name, arm in manifest["arms"].items():
-        hermes_config = arm.get("hermes") if isinstance(arm, dict) else None
-        moa_config = hermes_config.get("moa", {}) if isinstance(hermes_config, dict) else {}
-        if moa_config.get("enabled") is True:
-            validate_moa_traces(
-                run_dir,
-                expected_count=len(manifest["pairs"]),
-                arm_name=str(arm_name),
-                hermes_config=hermes_config,
-            )
     expected = {(str(p["question_id"]), int(p["sample_index"])) for p in manifest["pairs"]}
     amendment_path = run_dir / "run-amendment.json"
     excluded: set[tuple[str, int]] = set()
@@ -225,9 +215,7 @@ def score_run(run_dir: Path) -> dict[str, Any]:
     effective = expected - excluded
     arm_names = list(manifest["arms"])
     if any("hermes" in arm for arm in manifest["arms"].values()):
-        return score_multiarm_run(
-            run_dir, by_id, manifest, effective, expected, excluded, arm_names
-        )
+        return score_multiarm_run(run_dir, by_id, manifest, expected, arm_names, excluded)
     records = {
         arm: _load_answers(run_dir / "raw" / f"hermes-{arm}.jsonl") for arm in ("base", "moa")
     }
@@ -322,20 +310,125 @@ def score_multiarm_run(
     run_dir: Path,
     by_id: dict[str, dict[str, Any]],
     manifest: dict[str, Any],
-    effective: set[tuple[str, int]],
     expected: set[tuple[str, int]],
-    excluded: set[tuple[str, int]],
     arm_names: list[str],
+    legacy_pair_exclusions: set[tuple[str, int]],
 ) -> dict[str, Any]:
     baseline = str(manifest["execution_contract"]["baseline_arm"])
     if baseline not in arm_names:
         raise ContractError(f"baseline arm is not configured: {baseline}")
+    pair_ids = {
+        (str(pair["question_id"]), int(pair["sample_index"])): str(pair["pair_id"])
+        for pair in manifest["pairs"]
+    }
     records = {arm: _load_answers(run_dir / "raw" / f"hermes-{arm}.jsonl") for arm in arm_names}
+    explicit: dict[tuple[str, tuple[str, int]], dict[str, Any]] = {}
+    for identity in legacy_pair_exclusions:
+        for arm in arm_names:
+            explicit[(arm, identity)] = {
+                "arm": arm,
+                "pair_id": pair_ids[identity],
+                "question_id": identity[0],
+                "sample_index": identity[1],
+                "code": "LEGACY_PAIR_EXCLUSION",
+                "reason": "authorized pair-wide exclusion from run-amendment.json",
+            }
+    exclusions_path = run_dir / "exclusions.json"
+    if exclusions_path.is_file():
+        payload = json.loads(exclusions_path.read_text(encoding="utf-8"))
+        if payload.get("schema_version") != 1:
+            raise ContractError("unsupported exclusions schema")
+        for item in payload.get("excluded_cells") or []:
+            arm = str(item.get("arm"))
+            identity = (str(item.get("question_id")), int(item.get("sample_index")))
+            if arm not in arm_names or identity not in expected:
+                raise ContractError("excluded cell is outside frozen matrix")
+            if str(item.get("pair_id")) != pair_ids[identity]:
+                raise ContractError("excluded cell pair_id does not match frozen matrix")
+            if not str(item.get("code") or "") or not str(item.get("reason") or ""):
+                raise ContractError("excluded cell is missing code or reason")
+            key = (arm, identity)
+            if key in explicit:
+                raise ContractError("duplicate excluded cell")
+            explicit[key] = dict(item)
+
+    unexplained: list[str] = []
     for arm, rows in records.items():
-        if set(rows) != effective:
-            raise ContractError(
-                f"{arm} answer coverage mismatch: expected {len(effective)}, got {len(rows)}"
-            )
+        extra = set(rows) - expected
+        if extra:
+            raise ContractError(f"{arm} has answers outside frozen matrix")
+        for identity in expected - set(rows):
+            if (arm, identity) not in explicit:
+                unexplained.append(f"{arm}:{identity[0]}:{identity[1]}")
+    if unexplained:
+        raise ContractError(f"unexplained missing cells: {', '.join(sorted(unexplained))}")
+
+    exclusions = dict(explicit)
+    for arm_name, arm in manifest["arms"].items():
+        hermes_config = arm.get("hermes") if isinstance(arm, dict) else None
+        moa_config = hermes_config.get("moa", {}) if isinstance(hermes_config, dict) else {}
+        if moa_config.get("enabled") is not True:
+            continue
+        trace_dir = run_dir / "homes" / str(arm_name) / "moa-traces"
+        for identity, record in records[str(arm_name)].items():
+            pair_id = pair_ids[identity]
+            paths = sorted(trace_dir.glob(f"{pair_id}-*.jsonl")) if trace_dir.is_dir() else []
+            if len(paths) != 1:
+                exclusions[(str(arm_name), identity)] = {
+                    "arm": str(arm_name),
+                    "pair_id": pair_id,
+                    "question_id": identity[0],
+                    "sample_index": identity[1],
+                    "code": "INVALID_MOA_TRACE",
+                    "reason": f"expected one trace, got {len(paths)}",
+                }
+                continue
+            try:
+                trace_records = [
+                    json.loads(line)
+                    for line in paths[0].read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+            except json.JSONDecodeError as error:
+                exclusions[(str(arm_name), identity)] = {
+                    "arm": str(arm_name),
+                    "pair_id": pair_id,
+                    "question_id": identity[0],
+                    "sample_index": identity[1],
+                    "code": "INVALID_MOA_TRACE",
+                    "reason": f"malformed trace JSON: {error.msg}",
+                }
+                continue
+            if len(trace_records) != 1:
+                exclusions[(str(arm_name), identity)] = {
+                    "arm": str(arm_name),
+                    "pair_id": pair_id,
+                    "question_id": identity[0],
+                    "sample_index": identity[1],
+                    "code": "INVALID_MOA_TRACE",
+                    "reason": f"expected one trace record, got {len(trace_records)}",
+                }
+                continue
+            try:
+                validate_moa_trace_record(trace_records[0], answer_text(record), hermes_config)
+            except ContractError as error:
+                exclusions[(str(arm_name), identity)] = {
+                    "arm": str(arm_name),
+                    "pair_id": pair_id,
+                    "question_id": identity[0],
+                    "sample_index": identity[1],
+                    "code": "INVALID_MOA_TRACE",
+                    "reason": str(error),
+                }
+
+    valid_by_arm = {
+        arm: set(records[arm])
+        - {identity for excluded_arm, identity in exclusions if excluded_arm == arm}
+        for arm in arm_names
+    }
+    common_valid = set.intersection(*(valid_by_arm[arm] for arm in arm_names))
+    if not common_valid:
+        raise ContractError("no common valid pairs remain after exclusions")
 
     scores: list[dict[str, Any]] = []
     cells: list[dict[str, Any]] = []
@@ -344,7 +437,7 @@ def score_multiarm_run(
     category_values: dict[str, dict[str, list[float]]] = {
         arm: defaultdict(list) for arm in arm_names
     }
-    for qid, sample_index in sorted(effective):
+    for qid, sample_index in sorted(common_valid):
         question = by_id[qid]
         cell_scores: dict[str, float] = {}
         for arm in arm_names:
@@ -408,14 +501,35 @@ def score_multiarm_run(
             "ties": sum(value == 0 for value in sample_deltas),
             "regressions": sum(value < 0 for value in sample_deltas),
         }
+    exclusion_list = sorted(
+        exclusions.values(),
+        key=lambda item: (item["arm"], item["question_id"], item["sample_index"]),
+    )
+    warning = manifest.get("hermes_compatibility", {}).get("status") != "verified"
+    if exclusion_list:
+        status = "VALID_WITH_EXCLUSIONS_AND_HERMES_WARNING" if warning else "VALID_WITH_EXCLUSIONS"
+    else:
+        status = "VALID_WITH_HERMES_WARNING" if warning else "VALID"
     summary = {
-        "status": summary_status(manifest, bool(excluded)),
+        "status": status,
         "hermes_compatibility": summary_compatibility(manifest),
         "baseline_arm": baseline,
         "arms": arm_names,
         "planned_pairs": len(expected),
-        "excluded_pairs": len(excluded),
-        "scored_pairs": len(effective),
+        "common_valid_pairs": len(common_valid),
+        "paired_coverage_fraction": len(common_valid) / len(expected),
+        "planned_cells": len(expected) * len(arm_names),
+        "valid_cells": sum(len(values) for values in valid_by_arm.values()),
+        "excluded_cells": len(exclusion_list),
+        "arm_coverage": {
+            arm: {
+                "planned_cells": len(expected),
+                "valid_cells": len(valid_by_arm[arm]),
+                "excluded_cells": len(expected) - len(valid_by_arm[arm]),
+            }
+            for arm in arm_names
+        },
+        "exclusions": exclusion_list,
         "arm_means": arm_means,
         "comparisons_vs_baseline": comparisons,
         "category_means": {
@@ -426,6 +540,12 @@ def score_multiarm_run(
             for arm, categories in category_values.items()
         },
         "timing": timing_summary(manifest, records),
+        "reference_phase_timing": {
+            "status": "unavailable",
+            "reason": (
+                "Hermes 0.19.1 MoA traces do not persist reference phase timestamps or duration"
+            ),
+        },
         "scores_sha256": sha256_bytes(canonical_json(scores)),
     }
     (run_dir / "scores.json").write_bytes(canonical_json(scores) + b"\n")

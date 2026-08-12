@@ -29,11 +29,18 @@ from .core import (
     validate_frozen_selection,
     validate_treatment_boundary,
 )
-from .trace_validation import validate_moa_traces
+from .trace_validation import validate_moa_trace_record, validate_moa_traces
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKERS_PER_CPU = 4
 MAX_WORKERS = 32
+RETRYABLE_EXCLUSION_CODES = {"CELL_TIMEOUT", "MODEL_OR_PROVIDER_FAILURE", "INVALID_MOA_TRACE"}
+
+
+class CellExecutionError(RuntimeError):
+    """A provider/model failure confined to one benchmark cell."""
+
+
 _CPU_COUNT_UNSET = object()
 
 SUPPORTED_HERMES_PROFILES = {"0.19.1"}
@@ -707,6 +714,7 @@ def prepare(
                 else "* non-strict streaming timing is not paired arm wall-time evidence"
             ),
         },
+        "cell_journal_schema_version": 1,
         "arms": config["arms"],
     }
     (run_dir / "manifest.json").write_bytes(canonical_json(manifest) + b"\n")
@@ -753,15 +761,24 @@ def invoke_arm(
             check=False,
         )
         if completed.returncode != 0 or not completed.stdout.strip():
-            raise RuntimeError(
+            raise CellExecutionError(
                 f"{arm_name} failed rc={completed.returncode}: {completed.stderr[-2000:]}"
             )
-        turns.append(completed.stdout.strip())
+        turns.append(validate_answer_output(arm_name, completed.stdout))
     return {
         "turns": turns,
         "total_time_s": round(time.monotonic() - started, 3),
         "stdout_sha256": sha256_bytes("\n".join(turns).encode()),
     }
+
+
+def validate_answer_output(arm_name: str, output: str) -> str:
+    text = output.strip()
+    if not text:
+        raise CellExecutionError(f"{arm_name} returned empty output")
+    if text.casefold() == "(empty response)":
+        raise CellExecutionError(f"{arm_name} returned degraded output")
+    return text
 
 
 def subprocess_environment(home: Path) -> dict[str, str]:
@@ -996,51 +1013,256 @@ def collect_cell_traces(run_dir: Path, arm_name: str, pair_id: str, cell_home: P
         shutil.copy2(path, destination / f"{pair_id}-{index}.jsonl")
 
 
-def run(
-    config_path: Path,
-    source_home: Path,
+def write_cell_outcome(run_dir: Path, outcome: dict[str, Any]) -> Path:
+    arm_name = str(outcome["arm"])
+    pair_id = str(outcome["pair_id"])
+    directory = run_dir / "cells" / arm_name
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = directory / f"{pair_id}.json"
+    if path.exists():
+        raise ContractError(f"cell outcome already exists: {path}")
+    temporary = directory / f".{pair_id}.{threading.get_ident()}.tmp"
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(canonical_json(outcome) + b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return path
+
+
+def select_resume_cells(
     run_dir: Path,
-    hermes_executable: str | None = None,
+    pairs: list[dict[str, Any]],
+    arm_names: tuple[str, ...],
     *,
-    scheduling_override: str | None = None,
-    workers_override: int | None = None,
-) -> None:
-    config = load_config(config_path)
-    resolved_hermes = resolve_hermes_executable(hermes_executable)
-    manifest = prepare(
-        config_path,
-        source_home,
-        run_dir,
-        resolved_hermes,
-        scheduling_override=scheduling_override,
-        workers_override=workers_override,
-    )
-    questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
-    by_id = {str(q["question_id"]): q for q in questions}
+    retry_excluded: bool,
+    arms: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    expected = {
+        (arm, str(pair["pair_id"])): (str(pair["question_id"]), int(pair["sample_index"]))
+        for pair in pairs
+        for arm in arm_names
+    }
+    outcomes: dict[tuple[str, str], dict[str, Any]] = {}
+    cells_dir = run_dir / "cells"
+    for path in sorted(cells_dir.glob("*/*.json")) if cells_dir.is_dir() else []:
+        try:
+            outcome = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise ContractError(f"malformed cell outcome {path}: {error.msg}") from error
+        arm = str(outcome.get("arm"))
+        pair_id = str(outcome.get("pair_id"))
+        identity = (arm, pair_id)
+        if identity not in expected:
+            raise ContractError(f"cell outcome is outside frozen matrix: {path}")
+        if path != cells_dir / arm / f"{pair_id}.json":
+            raise ContractError(f"cell outcome path does not match identity: {path}")
+        question_id, sample_index = expected[identity]
+        if (
+            str(outcome.get("question_id")) != question_id
+            or int(outcome.get("sample_index", -1)) != sample_index
+        ):
+            raise ContractError(f"cell outcome identity does not match frozen matrix: {path}")
+        if identity in outcomes:
+            raise ContractError(f"duplicate cell outcome: {arm}/{pair_id}")
+        status = outcome.get("status")
+        if status == "valid":
+            record = outcome.get("record") or {}
+            if (
+                str(record.get("question_id")) != question_id
+                or int(record.get("sample_index", -1)) != sample_index
+            ):
+                raise ContractError(f"valid cell record identity mismatch: {path}")
+            if str((record.get("api_info") or {}).get("pair_id")) != pair_id:
+                raise ContractError(f"valid cell record pair_id mismatch: {path}")
+        elif status == "excluded":
+            if not str(outcome.get("code") or "") or not str(outcome.get("reason") or ""):
+                raise ContractError(f"excluded cell is missing code or reason: {path}")
+        else:
+            raise ContractError(f"unsupported cell outcome status in {path}")
+        outcomes[identity] = outcome
+
+    selected: list[dict[str, Any]] = []
+    for pair in pairs:
+        order = tuple(pair.get("order") or arm_names)
+        if len(order) != len(arm_names) or set(order) != set(arm_names):
+            raise ContractError(f"pair order is not an exact arm permutation: {pair['pair_id']}")
+        for arm_name in order:
+            if arm_name not in arm_names:
+                raise ContractError(f"pair order contains unknown arm: {arm_name}")
+            key = (arm_name, str(pair["pair_id"]))
+            outcome = outcomes.get(key)
+            invalid_trace = False
+            if (
+                retry_excluded
+                and outcome is not None
+                and outcome.get("status") == "valid"
+                and arms is not None
+                and arm_reference_models(arms[arm_name])
+            ):
+                trace_dir = run_dir / "homes" / arm_name / "moa-traces"
+                paths = sorted(trace_dir.glob(f"{pair['pair_id']}-*.jsonl"))
+                try:
+                    if len(paths) != 1:
+                        raise ContractError(f"expected one trace, got {len(paths)}")
+                    rows = [
+                        json.loads(line)
+                        for line in paths[0].read_text(encoding="utf-8").splitlines()
+                        if line.strip()
+                    ]
+                    if len(rows) != 1:
+                        raise ContractError(f"expected one trace record, got {len(rows)}")
+                    answer = str(outcome["record"]["choices"][0]["turns"][-1])
+                    validate_moa_trace_record(rows[0], answer, arm_hermes_config(arms[arm_name]))
+                except (
+                    ContractError,
+                    json.JSONDecodeError,
+                    KeyError,
+                    IndexError,
+                    TypeError,
+                    ValueError,
+                ):
+                    invalid_trace = True
+            if (
+                outcome is None
+                or invalid_trace
+                or (
+                    retry_excluded
+                    and outcome.get("status") == "excluded"
+                    and outcome.get("code") in RETRYABLE_EXCLUSION_CODES
+                )
+            ):
+                selected.append({**pair, "arm_name": arm_name})
+    return selected
+
+
+def archive_cell_attempt(run_dir: Path, cell: dict[str, Any]) -> int:
+    arm_name = str(cell["arm_name"])
+    pair_id = str(cell["pair_id"])
+    attempt_dir = run_dir / "attempts" / arm_name / pair_id
+    attempt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    numbers = [int(path.name.split("-", 1)[0]) for path in attempt_dir.iterdir()]
+    attempt = max(numbers, default=0) + 1
+    destination = attempt_dir / f"{attempt:04d}-previous"
+    destination.mkdir(mode=0o700)
+    outcome_path = run_dir / "cells" / arm_name / f"{pair_id}.json"
+    if outcome_path.exists():
+        shutil.move(str(outcome_path), destination / "outcome.json")
+    cell_home = run_dir / "cell-homes" / arm_name / pair_id
+    if cell_home.exists():
+        shutil.move(str(cell_home), destination / "cell-home")
+    trace_dir = run_dir / "homes" / arm_name / "moa-traces"
+    traces = sorted(trace_dir.glob(f"{pair_id}-*.jsonl")) if trace_dir.is_dir() else []
+    if traces:
+        archived_traces = destination / "moa-traces"
+        archived_traces.mkdir(mode=0o700)
+        for path in traces:
+            shutil.move(str(path), archived_traces / path.name)
+    return attempt
+
+
+def cell_exclusion(cell: dict[str, Any], code: str, reason: str) -> dict[str, Any]:
+    return {
+        "status": "excluded",
+        "arm": cell["arm_name"],
+        "pair_id": cell["pair_id"],
+        "question_id": cell["question_id"],
+        "sample_index": cell["sample_index"],
+        "code": code,
+        "reason": reason,
+    }
+
+
+def finalize_outcomes(run_dir: Path, manifest: dict[str, Any], arm_names: tuple[str, ...]) -> None:
     raw_dir = run_dir / "raw"
     raw_dir.mkdir(exist_ok=True, mode=0o700)
-    existing = [path for path in raw_dir.glob("*.jsonl") if path.stat().st_size]
-    if existing:
-        raise ContractError(
-            "run directory already contains answers; use a fresh run directory to preserve pairing"
+    pair_position = {str(pair["pair_id"]): index for index, pair in enumerate(manifest["pairs"])}
+    exclusions: list[dict[str, Any]] = []
+    for arm_name in arm_names:
+        directory = run_dir / "cells" / arm_name
+        outcomes = (
+            [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in sorted(directory.glob("*.json"))
+            ]
+            if directory.is_dir()
+            else []
         )
-    execution = manifest["execution_contract"]
-    arm_names = tuple(config["arms"])
-    waves = schedule_cells(
-        manifest["pairs"],
-        arm_names,
-        scheduling=execution["scheduling"],
-        workers=execution["effective_workers"],
+        if len(outcomes) != len(manifest["pairs"]):
+            raise ContractError(
+                f"cell outcome cardinality mismatch for {arm_name}: "
+                f"expected {len(manifest['pairs'])}, got {len(outcomes)}"
+            )
+        seen: set[str] = set()
+        valid_records: list[tuple[int, dict[str, Any]]] = []
+        for outcome in outcomes:
+            pair_id = str(outcome.get("pair_id"))
+            if (
+                pair_id not in pair_position
+                or pair_id in seen
+                or str(outcome.get("arm")) != arm_name
+            ):
+                raise ContractError(f"invalid or duplicate cell outcome for {arm_name}/{pair_id}")
+            seen.add(pair_id)
+            if outcome.get("status") == "valid":
+                valid_records.append((pair_position[pair_id], outcome["record"]))
+            elif outcome.get("status") == "excluded":
+                exclusions.append({key: value for key, value in outcome.items() if key != "status"})
+            else:
+                raise ContractError(f"unsupported cell outcome status for {arm_name}/{pair_id}")
+        payload = "".join(
+            json.dumps(record, ensure_ascii=False) + "\n"
+            for _, record in sorted(valid_records, key=lambda item: item[0])
+        )
+        (raw_dir / f"hermes-{arm_name}.jsonl").write_text(payload, encoding="utf-8")
+    (run_dir / "exclusions.json").write_bytes(
+        canonical_json({"schema_version": 1, "excluded_cells": exclusions}) + b"\n"
     )
-    pair_position = {pair["pair_id"]: index for index, pair in enumerate(manifest["pairs"])}
-    records: dict[str, list[tuple[int, dict[str, Any]]]] = {arm: [] for arm in arm_names}
+
+
+def execute_cells(
+    config_path: Path,
+    run_dir: Path,
+    config: dict[str, Any],
+    manifest: dict[str, Any],
+    cells: list[dict[str, Any]],
+    resolved_hermes: str,
+    *,
+    resumed: bool,
+) -> None:
+    if not cells:
+        finalize_outcomes(run_dir, manifest, tuple(config["arms"]))
+        return
+    questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
+    by_id = {str(question["question_id"]): question for question in questions}
+    execution = manifest["execution_contract"]
+    scheduling = "streaming" if resumed else execution["scheduling"]
+    workers = min(int(execution["effective_workers"]), len(cells))
+    waves = (
+        [cells]
+        if scheduling == "streaming"
+        else schedule_cells(
+            manifest["pairs"], tuple(config["arms"]), scheduling=scheduling, workers=workers
+        )
+    )
+    selected = {(str(cell["arm_name"]), str(cell["pair_id"])) for cell in cells}
+    waves = [
+        [cell for cell in wave if (str(cell["arm_name"]), str(cell["pair_id"])) in selected]
+        for wave in waves
+    ]
+    waves = [wave for wave in waves if wave]
     run_started = time.monotonic()
 
     def execute_cell(cell: dict[str, Any], start_barrier: threading.Barrier | None):
         verify_run_integrity(config_path, run_dir, manifest)
-        arm_name = cell["arm_name"]
-        pair_id = cell["pair_id"]
-        question = by_id[cell["question_id"]]
+        arm_name = str(cell["arm_name"])
+        pair_id = str(cell["pair_id"])
+        question = by_id[str(cell["question_id"])]
+        if (run_dir / "cells" / arm_name / f"{pair_id}.json").exists():
+            archive_cell_attempt(run_dir, cell)
         try:
             cell_home = prepare_cell_home(run_dir, arm_name, pair_id)
             if start_barrier is not None:
@@ -1049,14 +1271,32 @@ def run(
             if start_barrier is not None:
                 start_barrier.abort()
             raise
-        result = invoke_arm(
-            arm_name,
-            config["arms"][arm_name],
-            cell_home,
-            question,
-            effective_timeout(config),
-            executable=resolved_hermes,
-        )
+        cell_started = time.monotonic()
+        try:
+            result = invoke_arm(
+                arm_name,
+                config["arms"][arm_name],
+                cell_home,
+                question,
+                effective_timeout(config),
+                executable=resolved_hermes,
+            )
+        except subprocess.TimeoutExpired:
+            collect_cell_traces(run_dir, arm_name, pair_id, cell_home)
+            outcome = cell_exclusion(
+                cell,
+                "CELL_TIMEOUT",
+                f"Hermes subprocess exceeded {effective_timeout(config)} seconds",
+            )
+            outcome["elapsed_seconds"] = round(time.monotonic() - cell_started, 3)
+            write_cell_outcome(run_dir, outcome)
+            return outcome
+        except CellExecutionError as error:
+            collect_cell_traces(run_dir, arm_name, pair_id, cell_home)
+            outcome = cell_exclusion(cell, "MODEL_OR_PROVIDER_FAILURE", str(error)[-2000:])
+            outcome["elapsed_seconds"] = round(time.monotonic() - cell_started, 3)
+            write_cell_outcome(run_dir, outcome)
+            return outcome
         collect_cell_traces(run_dir, arm_name, pair_id, cell_home)
         provider, model, reasoning = arm_identity(config["arms"][arm_name])
         record = {
@@ -1080,41 +1320,110 @@ def run(
                 "response_sha256": result["stdout_sha256"],
             },
         }
-        return arm_name, pair_position[pair_id], record
+        outcome = {
+            "status": "valid",
+            "arm": arm_name,
+            "pair_id": pair_id,
+            "question_id": question["question_id"],
+            "sample_index": cell["sample_index"],
+            "record": record,
+        }
+        write_cell_outcome(run_dir, outcome)
+        return outcome
 
     for wave in waves:
-        start_barrier = (
-            threading.Barrier(len(wave)) if execution["scheduling"] == "balanced_waves" else None
-        )
+        start_barrier = threading.Barrier(len(wave)) if scheduling == "balanced_waves" else None
         with ThreadPoolExecutor(
-            max_workers=min(execution["effective_workers"], len(wave)),
-            thread_name_prefix="livebench-cell",
+            max_workers=min(workers, len(wave)), thread_name_prefix="livebench-cell"
         ) as executor:
             futures = [executor.submit(execute_cell, cell, start_barrier) for cell in wave]
-            completed = [future.result() for future in futures]
-        for arm_name, position, record in completed:
-            records[arm_name].append((position, record))
-
-    for arm_name in arm_names:
-        payload = "".join(
-            json.dumps(record, ensure_ascii=False) + "\n"
-            for _, record in sorted(records[arm_name], key=lambda item: item[0])
-        )
-        (raw_dir / f"hermes-{arm_name}.jsonl").write_text(payload, encoding="utf-8")
+            for future in futures:
+                future.result()
+    finalize_outcomes(run_dir, manifest, tuple(config["arms"]))
+    history = list(manifest.get("execution_attempts") or [])
+    history.append(
+        {
+            "kind": "resume" if resumed else "initial",
+            "executed_cells": len(cells),
+            "makespan_seconds": round(time.monotonic() - run_started, 3),
+            "timing_comparable": bool(execution["timing_comparable"] and not resumed),
+        }
+    )
+    manifest["execution_attempts"] = history
     manifest["execution_result"] = {
-        "run_makespan_seconds": round(time.monotonic() - run_started, 3),
-        "timing_comparable": execution["timing_comparable"],
-        "timing_note": execution.get("timing_note"),
+        "run_makespan_seconds": round(sum(float(item["makespan_seconds"]) for item in history), 3),
+        "timing_comparable": bool(execution["timing_comparable"] and len(history) == 1),
+        "timing_note": (
+            execution.get("timing_note")
+            if len(history) == 1
+            else "resumed execution is not one paired wall-time experiment"
+        ),
     }
     (run_dir / "manifest.json").write_bytes(canonical_json(manifest) + b"\n")
-    for arm_name, arm in config["arms"].items():
-        if arm_reference_models(arm):
-            validate_moa_traces(
-                run_dir,
-                expected_count=len(manifest["pairs"]),
-                arm_name=arm_name,
-                hermes_config=arm_hermes_config(arm),
-            )
+
+
+def run(
+    config_path: Path,
+    source_home: Path,
+    run_dir: Path,
+    hermes_executable: str | None = None,
+    *,
+    scheduling_override: str | None = None,
+    workers_override: int | None = None,
+) -> None:
+    config = load_config(config_path)
+    resolved_hermes = resolve_hermes_executable(hermes_executable)
+    manifest = prepare(
+        config_path,
+        source_home,
+        run_dir,
+        resolved_hermes,
+        scheduling_override=scheduling_override,
+        workers_override=workers_override,
+    )
+    arm_names = tuple(config["arms"])
+    cells = [
+        {**pair, "arm_name": arm_name}
+        for pair in manifest["pairs"]
+        for arm_name in pair.get("order") or arm_names
+    ]
+    execute_cells(config_path, run_dir, config, manifest, cells, resolved_hermes, resumed=False)
+
+
+def resume_run(
+    config_path: Path,
+    run_dir: Path,
+    hermes_executable: str | None = None,
+    *,
+    retry_excluded: bool = False,
+) -> None:
+    config = load_config(config_path)
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise ContractError(f"missing run manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("cell_journal_schema_version") != 1:
+        raise ContractError("run predates durable cell journals; automatic resume is unsafe")
+    if manifest.get("arms") != config.get("arms"):
+        raise ContractError("configured arms drift from frozen manifest")
+    verify_run_integrity(config_path, run_dir, manifest)
+    resolved_hermes = resolve_hermes_executable(hermes_executable)
+    compatibility = probe_hermes_compatibility(
+        config,
+        {arm: run_dir / "homes" / arm for arm in config["arms"]},
+        executable=resolved_hermes,
+    )
+    frozen = manifest.get("hermes_compatibility") or {}
+    if compatibility != frozen:
+        raise ContractError("Hermes compatibility provenance drift on resume")
+    cells = select_resume_cells(
+        run_dir,
+        manifest["pairs"],
+        tuple(config["arms"]),
+        retry_excluded=retry_excluded,
+        arms=config["arms"],
+    )
+    execute_cells(config_path, run_dir, config, manifest, cells, resolved_hermes, resumed=True)
 
 
 def run_single_arm(
@@ -1193,7 +1502,7 @@ def parser() -> argparse.ArgumentParser:
     prep = sub.add_parser("prepare", help="No-cost validation and manifest creation")
     prep.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
     prep.add_argument(
-        "--workers", type=int, help="Worker threads (1-32; default: 3 x CPUs, capped at 32)"
+        "--workers", type=int, help="Worker threads (1-32; default: 4 x CPUs, capped at 32)"
     )
     prep.add_argument(
         "--balanced-waves",
@@ -1203,12 +1512,24 @@ def parser() -> argparse.ArgumentParser:
     execute = sub.add_parser("run", help="Execute paid paired model calls")
     execute.add_argument("--run-dir", type=Path, default=ROOT / "runs/smoke")
     execute.add_argument(
-        "--workers", type=int, help="Worker threads (1-32; default: 3 x CPUs, capped at 32)"
+        "--workers", type=int, help="Worker threads (1-32; default: 4 x CPUs, capped at 32)"
     )
     execute.add_argument(
         "--balanced-waves",
         action="store_true",
         help="Use synchronized complete-arm waves for comparable wall-time evidence",
+    )
+
+    resume = sub.add_parser(
+        "resume", help="Continue only missing cells in an existing journaled run"
+    )
+    resume.add_argument("--run-dir", type=Path, required=True)
+    resume.add_argument(
+        "--retry-excluded",
+        action="store_true",
+        help=(
+            "Also retry timeout, model/provider, and invalid-MoA-trace cells; may incur paid calls"
+        ),
     )
 
     execute_arm = sub.add_parser("run-arm", help="Execute a frozen single treatment arm")
@@ -1241,6 +1562,13 @@ def main() -> None:
                 args.hermes_executable,
                 scheduling_override="balanced_waves" if args.balanced_waves else None,
                 workers_override=args.workers,
+            )
+        elif args.command == "resume":
+            resume_run(
+                args.config,
+                args.run_dir,
+                args.hermes_executable,
+                retry_excluded=args.retry_excluded,
             )
         elif args.command == "run-arm":
             run_single_arm(

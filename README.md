@@ -128,7 +128,29 @@ uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" ru
 
 Do not edit `config.yaml` after `prepare`. The runner rejects config drift.
 
-The default scheduler is streaming: each free worker immediately starts the next isolated arm-cell. Automatic concurrency is `3 ×` the detected CPU count, capped at `32`; use `--workers N` to select any value from 1 through 32. Streaming timing is marked `*` because it is throughput evidence, not synchronized paired arm wall-time evidence.
+Continue an interrupted journaled run without repeating completed or explicitly excluded cells:
+
+```bash
+uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" resume \
+  --run-dir runs/default
+```
+
+To also retry timeout, model/provider, and invalid or degraded MoA-trace cells, opt in explicitly:
+
+```bash
+uv run livebench-hermes-ab --config config.yaml --hermes-executable "$HERMES" resume \
+  --run-dir runs/default --retry-excluded
+```
+
+Retries may make paid calls and often reproduce the same model limit. Previous outcomes, cell homes,
+and traces are archived under `attempts/<arm>/<pair-id>/`. Resume refuses pre-journal runs and any
+config, Hermes provenance, manifest, selected-question, or generated-home drift.
+
+The default scheduler is streaming: each free worker immediately starts the next isolated arm-cell. Automatic concurrency is `4 ×` the detected CPU count, capped at `32`; use `--workers N` to select any value from 1 through 32. Streaming timing is marked `*` because it is throughput evidence, not synchronized paired arm wall-time evidence.
+
+Every completed cell writes an atomic journal entry under `cells/<arm>/<pair-id>.json`. A cell-local timeout, provider failure, empty response, or degraded MoA trace is preserved as an explicit reason-coded exclusion. The scorer reports arm-local coverage and computes paired means and deltas only on the intersection of valid `(question_id, sample_index)` identities across all compared arms. Missing cells without a matching exclusion remain fatal, as do malformed manifests, provenance drift, corrupt journals, and unlocalized harness failures.
+
+`exclusions.json` and `summary.json` retain the excluded cell identity, arm, reason, resulting coverage, and scoring status. Failed artifacts are never replaced or silently imputed. Hermes 0.19.1 does not persist reference-phase timestamps, so reported MoA cell duration includes the reference, aggregator, and local overhead; it is not presented as exact reference-model latency.
 
 For comparable paired wall time, opt into complete-arm waves during both preflight and execution:
 

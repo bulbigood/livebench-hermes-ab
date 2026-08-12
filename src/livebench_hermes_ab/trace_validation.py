@@ -12,6 +12,53 @@ def _text_hash(text: str) -> str:
     return sha256_bytes(text.strip().encode())
 
 
+def validate_moa_trace_record(
+    record: dict[str, Any],
+    answer: str,
+    hermes_config: dict[str, Any],
+) -> dict[str, int]:
+    moa = hermes_config.get("moa", {})
+    preset_name = str(moa.get("active_preset") or moa.get("default_preset") or "default")
+    preset = moa.get("presets", {}).get(preset_name, {})
+    expected_references = list(preset.get("reference_models") or [])
+    expected_aggregator = dict(preset.get("aggregator") or {})
+    if record.get("preset") != preset_name:
+        raise ContractError("unexpected preset")
+    references = record.get("references") or []
+    if len(references) != len(expected_references):
+        raise ContractError("unexpected reference count")
+    reference_input = reference_output = 0
+    for reference, expected_reference in zip(references, expected_references, strict=True):
+        if reference.get("provider") != expected_reference.get("provider"):
+            raise ContractError("unexpected reference provider")
+        if reference.get("model") != expected_reference.get("model"):
+            raise ContractError("unexpected reference model")
+        output = str(reference.get("output") or "").strip()
+        if not output:
+            raise ContractError("empty reference output")
+        if output.casefold() == "(empty response)":
+            raise ContractError("degraded reference output")
+        usage = reference.get("usage") or {}
+        if int(usage.get("output_tokens") or 0) <= 0:
+            raise ContractError("missing reference output usage")
+        reference_input += int(usage.get("input_tokens") or 0)
+        reference_output += int(usage.get("output_tokens") or 0)
+    aggregator = record.get("aggregator") or {}
+    if aggregator.get("provider") != expected_aggregator.get("provider"):
+        raise ContractError("unexpected aggregator provider")
+    if aggregator.get("model") != expected_aggregator.get("model"):
+        raise ContractError("unexpected aggregator model")
+    aggregate_output = str(aggregator.get("output") or "").strip()
+    if not aggregate_output:
+        raise ContractError("empty aggregator output")
+    if _text_hash(aggregate_output) != _text_hash(answer):
+        raise ContractError("MoA trace output does not match persisted answer")
+    return {
+        "reference_input_tokens": reference_input,
+        "reference_output_tokens": reference_output,
+    }
+
+
 def validate_moa_traces(
     run_dir: Path,
     expected_count: int,

@@ -1,4 +1,5 @@
 import json
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -19,10 +20,14 @@ from livebench_hermes_ab.cli import (
     probe_hermes_compatibility,
     resolve_hermes_executable,
     resolve_worker_count,
+    resume_run,
     run,
     schedule_cells,
+    select_resume_cells,
     subprocess_environment,
+    validate_answer_output,
     validate_hermes_arm_schema,
+    write_cell_outcome,
 )
 from livebench_hermes_ab.core import ContractError
 
@@ -230,6 +235,65 @@ def test_streaming_run_uses_resolved_workers_and_unique_cell_homes(tmp_path: Pat
         assert len(rows) == 2
 
 
+def test_streaming_run_persists_success_when_neighbor_times_out(tmp_path: Path, monkeypatch):
+    arms = ("base", "treatment")
+    pair = {"pair_id": "p1", "question_id": "q1", "sample_index": 0}
+    config = {
+        "arms": {
+            name: {
+                "hermes": {
+                    "model": {"provider": "test", "default": name},
+                    "agent": {"reasoning_effort": "medium"},
+                    "moa": {"enabled": False},
+                }
+            }
+            for name in arms
+        },
+        "execution": {"scheduling": "streaming", "workers": 2},
+        "generation": {"timeout_seconds": 30},
+    }
+    run_dir = tmp_path / "run"
+
+    def fake_prepare(*args, **kwargs):
+        for arm in arms:
+            home = run_dir / "homes" / arm
+            home.mkdir(parents=True)
+            (home / "config.yaml").write_text("moa: {enabled: false}\n")
+        (run_dir / "questions.json").write_text(
+            json.dumps([{"question_id": "q1", "turns": ["prompt"]}])
+        )
+        return {
+            "pairs": [pair],
+            "execution_contract": {
+                "scheduling": "streaming",
+                "effective_workers": 2,
+                "timing_comparable": False,
+            },
+        }
+
+    def fake_invoke(arm_name, *args, **kwargs):
+        if arm_name == "treatment":
+            raise subprocess.TimeoutExpired(["hermes"], 30)
+        return {"turns": ["answer"], "total_time_s": 0.01, "stdout_sha256": "hash"}
+
+    monkeypatch.setattr("livebench_hermes_ab.cli.load_config", lambda path: config)
+    monkeypatch.setattr(
+        "livebench_hermes_ab.cli.resolve_hermes_executable", lambda value: "/fake/hermes"
+    )
+    monkeypatch.setattr("livebench_hermes_ab.cli.prepare", fake_prepare)
+    monkeypatch.setattr("livebench_hermes_ab.cli.verify_run_integrity", lambda *args: None)
+    monkeypatch.setattr("livebench_hermes_ab.cli.invoke_arm", fake_invoke)
+
+    run(tmp_path / "config.yaml", tmp_path / "source", run_dir)
+
+    assert len((run_dir / "raw/hermes-base.jsonl").read_text().splitlines()) == 1
+    assert (run_dir / "raw/hermes-treatment.jsonl").read_text() == ""
+    exclusions = json.loads((run_dir / "exclusions.json").read_text())["excluded_cells"]
+    assert exclusions[0]["code"] == "CELL_TIMEOUT"
+    assert json.loads((run_dir / "cells/base/p1.json").read_text())["status"] == "valid"
+    assert json.loads((run_dir / "cells/treatment/p1.json").read_text())["status"] == "excluded"
+
+
 def test_wave_invocation_runs_one_worker_per_arm_concurrently(tmp_path: Path):
     arm_names = ("base", "moa_minimax", "moa_mimo")
     barrier = threading.Barrier(len(arm_names))
@@ -421,6 +485,281 @@ def test_invoke_arm_uses_selected_hermes_executable(tmp_path: Path, monkeypatch)
 
     assert commands[0][0] == "/project/hermes"
     assert result["turns"] == ["answer"]
+
+
+def test_answer_validator_rejects_hermes_empty_response_sentinel():
+    with pytest.raises(RuntimeError, match="degraded output"):
+        validate_answer_output("base", "(empty response)")
+
+
+def test_answer_validator_accepts_normal_output():
+    assert validate_answer_output("base", " final answer ") == "final answer"
+
+
+def test_cell_outcome_is_written_atomically_and_cannot_be_overwritten(tmp_path: Path):
+    outcome = {
+        "status": "valid",
+        "arm": "base",
+        "pair_id": "p1",
+        "question_id": "q1",
+        "sample_index": 0,
+        "record": {
+            "question_id": "q1",
+            "sample_index": 0,
+            "choices": [{"turns": ["answer"]}],
+            "api_info": {"pair_id": "p1"},
+        },
+    }
+    path = write_cell_outcome(tmp_path, outcome)
+
+    assert json.loads(path.read_text()) == outcome
+    assert not path.with_suffix(".tmp").exists()
+    with pytest.raises(ContractError, match="already exists"):
+        write_cell_outcome(tmp_path, outcome)
+
+
+def test_resume_selects_only_missing_cells_by_default(tmp_path: Path):
+    pairs = [
+        {"pair_id": "p1", "question_id": "q1", "sample_index": 0},
+        {"pair_id": "p2", "question_id": "q2", "sample_index": 0},
+    ]
+    write_cell_outcome(
+        tmp_path,
+        {
+            "status": "valid",
+            "arm": "base",
+            "pair_id": "p1",
+            "question_id": "q1",
+            "sample_index": 0,
+            "record": {
+                "question_id": "q1",
+                "sample_index": 0,
+                "choices": [{"turns": ["answer"]}],
+                "api_info": {"pair_id": "p1"},
+            },
+        },
+    )
+    write_cell_outcome(
+        tmp_path,
+        {
+            "status": "excluded",
+            "arm": "treatment",
+            "pair_id": "p1",
+            "question_id": "q1",
+            "sample_index": 0,
+            "code": "CELL_TIMEOUT",
+            "reason": "limit",
+        },
+    )
+
+    selected = select_resume_cells(
+        tmp_path,
+        pairs,
+        ("base", "treatment"),
+        retry_excluded=False,
+    )
+
+    assert [(cell["arm_name"], cell["pair_id"]) for cell in selected] == [
+        ("base", "p2"),
+        ("treatment", "p2"),
+    ]
+
+
+def test_resume_optionally_retries_only_retryable_exclusions(tmp_path: Path):
+    pairs = [{"pair_id": "p1", "question_id": "q1", "sample_index": 0}]
+    for arm, code in {
+        "base": "CELL_TIMEOUT",
+        "treatment": "MODEL_OR_PROVIDER_FAILURE",
+        "control": "HARNESS_FAILURE",
+    }.items():
+        write_cell_outcome(
+            tmp_path,
+            {
+                "status": "excluded",
+                "arm": arm,
+                "pair_id": "p1",
+                "question_id": "q1",
+                "sample_index": 0,
+                "code": code,
+                "reason": "diagnostic",
+            },
+        )
+
+    selected = select_resume_cells(
+        tmp_path,
+        pairs,
+        ("base", "treatment", "control"),
+        retry_excluded=True,
+    )
+
+    assert [(cell["arm_name"], cell["pair_id"]) for cell in selected] == [
+        ("base", "p1"),
+        ("treatment", "p1"),
+    ]
+
+
+def test_resume_retry_excluded_selects_valid_cell_with_degraded_moa_trace(tmp_path: Path):
+    pairs = [{"pair_id": "p1", "question_id": "q1", "sample_index": 0}]
+    arm = {
+        "hermes": {
+            "model": {"provider": "moa", "default": "default"},
+            "agent": {"reasoning_effort": "medium"},
+            "moa": {
+                "enabled": True,
+                "active_preset": "default",
+                "presets": {
+                    "default": {
+                        "reference_models": [{"provider": "openrouter", "model": "ref"}],
+                        "aggregator": {"provider": "openai-codex", "model": "agg"},
+                    }
+                },
+            },
+        }
+    }
+    write_cell_outcome(
+        tmp_path,
+        {
+            "status": "valid",
+            "arm": "moa",
+            "pair_id": "p1",
+            "question_id": "q1",
+            "sample_index": 0,
+            "record": {
+                "question_id": "q1",
+                "sample_index": 0,
+                "choices": [{"turns": ["answer"]}],
+                "api_info": {"pair_id": "p1"},
+            },
+        },
+    )
+    trace_dir = tmp_path / "homes/moa/moa-traces"
+    trace_dir.mkdir(parents=True)
+    trace = {
+        "preset": "default",
+        "references": [
+            {
+                "provider": "openrouter",
+                "model": "ref",
+                "output": "(empty response)",
+                "usage": {"output_tokens": 50000},
+            }
+        ],
+        "aggregator": {"provider": "openai-codex", "model": "agg", "output": "answer"},
+    }
+    (trace_dir / "p1-0.jsonl").write_text(json.dumps(trace) + "\n")
+
+    assert (
+        select_resume_cells(tmp_path, pairs, ("moa",), retry_excluded=False, arms={"moa": arm})
+        == []
+    )
+    selected = select_resume_cells(
+        tmp_path, pairs, ("moa",), retry_excluded=True, arms={"moa": arm}
+    )
+    assert [(cell["arm_name"], cell["pair_id"]) for cell in selected] == [("moa", "p1")]
+
+
+def test_resume_noop_then_retries_only_excluded_cell_and_archives_attempt(
+    tmp_path: Path, monkeypatch
+):
+    run_dir = tmp_path / "run"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("frozen\n")
+    arms = {
+        name: {
+            "hermes": {
+                "model": {"provider": "test", "default": name},
+                "agent": {"reasoning_effort": "medium"},
+                "moa": {"enabled": False},
+            }
+        }
+        for name in ("base", "treatment")
+    }
+    config = {
+        "arms": arms,
+        "execution": {"scheduling": "streaming", "workers": 2},
+        "generation": {"timeout_seconds": 30},
+    }
+    pair = {
+        "pair_id": "p1",
+        "question_id": "q1",
+        "sample_index": 0,
+        "order": ["base", "treatment"],
+    }
+    for arm in arms:
+        (run_dir / "homes" / arm).mkdir(parents=True)
+        (run_dir / "homes" / arm / "config.yaml").write_text("moa: {enabled: false}\n")
+    (run_dir / "questions.json").write_text(json.dumps([{"question_id": "q1", "turns": ["p"]}]))
+    compatibility = {"status": "verified", "version": "0.19.1", "profile": "0.19.1"}
+    manifest = {
+        "pairs": [pair],
+        "arms": arms,
+        "cell_journal_schema_version": 1,
+        "config_sha256": "test",
+        "execution_contract": {
+            "scheduling": "streaming",
+            "effective_workers": 2,
+            "timing_comparable": False,
+        },
+        "hermes_compatibility": compatibility,
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest))
+    write_cell_outcome(
+        run_dir,
+        {
+            "status": "valid",
+            "arm": "base",
+            "pair_id": "p1",
+            "question_id": "q1",
+            "sample_index": 0,
+            "record": {
+                "question_id": "q1",
+                "sample_index": 0,
+                "choices": [{"turns": ["base"]}],
+                "api_info": {"pair_id": "p1"},
+            },
+        },
+    )
+    write_cell_outcome(
+        run_dir,
+        {
+            "status": "excluded",
+            "arm": "treatment",
+            "pair_id": "p1",
+            "question_id": "q1",
+            "sample_index": 0,
+            "code": "CELL_TIMEOUT",
+            "reason": "limit",
+        },
+    )
+    (run_dir / "cell-homes/treatment/p1").mkdir(parents=True)
+    (run_dir / "cell-homes/treatment/p1/evidence.txt").write_text("old")
+    calls = []
+
+    monkeypatch.setattr("livebench_hermes_ab.cli.load_config", lambda path: config)
+    monkeypatch.setattr("livebench_hermes_ab.cli.verify_run_integrity", lambda *args: None)
+    monkeypatch.setattr("livebench_hermes_ab.cli.resolve_hermes_executable", lambda value: "/h")
+    monkeypatch.setattr(
+        "livebench_hermes_ab.cli.probe_hermes_compatibility",
+        lambda *args, **kwargs: compatibility,
+    )
+    monkeypatch.setattr(
+        "livebench_hermes_ab.cli.invoke_arm",
+        lambda arm_name, *args, **kwargs: (
+            calls.append(arm_name)
+            or {"turns": ["retry"], "total_time_s": 0.1, "stdout_sha256": "hash"}
+        ),
+    )
+
+    resume_run(config_path, run_dir, retry_excluded=False)
+    assert calls == []
+    resume_run(config_path, run_dir, retry_excluded=True)
+
+    assert calls == ["treatment"]
+    assert json.loads((run_dir / "cells/treatment/p1.json").read_text())["status"] == "valid"
+    assert (run_dir / "attempts/treatment/p1/0001-previous/outcome.json").is_file()
+    assert (run_dir / "attempts/treatment/p1/0001-previous/cell-home/evidence.txt").is_file()
+    assert len((run_dir / "raw/hermes-base.jsonl").read_text().splitlines()) == 1
+    assert len((run_dir / "raw/hermes-treatment.jsonl").read_text().splitlines()) == 1
 
 
 def test_hermes_schema_rejects_unknown_treatment_key():
