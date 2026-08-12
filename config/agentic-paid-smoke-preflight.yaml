@@ -1,0 +1,29 @@
+schema_version: 1
+enabled: false
+identity_status: unconfirmed_gated_livebench
+scope:
+  task_id: psf__requests-1142
+  arm: plain
+  samples: 1
+  expected_provider_calls_min: 1
+  expected_provider_calls_max: 30
+model:
+  provider: null
+  model: null
+limits:
+  max_turns: 30
+  wall_clock_seconds: 1800
+  command_timeout_seconds: 120
+  max_input_tokens: 120000
+  max_output_tokens: 30000
+  max_cost_usd: 5.00
+image:
+  reference: docker.io/swebench/sweb.eval.x86_64.psf_1776_requests-1142:latest
+  digest: sha256:9b0b13a4a762e809a60424f8fd9ba40b45f87874de87479a771e4e673f937d59
+artifacts:
+  destination: runs/agentic-paid-smoke-pending
+  raw_visibility: private
+  public_projection: sanitized_digest_only
+approval:
+  required: true
+  granted: false

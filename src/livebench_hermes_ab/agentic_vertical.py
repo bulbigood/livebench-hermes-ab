@@ -9,8 +9,9 @@ from pathlib import Path
 
 from .agentic import AgenticCohort, AgenticStatus, AgenticTask, SidecarRequest, run_sidecar
 from .agentic_attempts import AgenticAttemptStore
+from .agentic_model import FakeModelAdapter, ModelBudget, ModelUsage, run_model_loop
 from .agentic_sandbox import PodmanWorkspaceExecutor
-from .agentic_trajectory import AgentAction, TrajectoryLimits, TrajectoryStatus, run_trajectory
+from .agentic_trajectory import TrajectoryStatus
 from .agentic_workspace import extract_candidate_patch, filter_hidden_test_changes
 from .domain import HarnessExecutionError
 
@@ -89,27 +90,36 @@ def _run_task(
     started = time.monotonic()
     _materialize_workspace(cohort, task, workspace)
     source = evidence_root / task.instance_id
-    trajectory_private = output_root / ".private" / task.instance_id / "trajectory"
-    trajectory_public = output_root / "trajectories" / f"{task.instance_id}.json"
-    trajectory = run_trajectory(
-        [AgentAction(("git", "status", "--short")), AgentAction.submit()],
-        workspace,
-        trajectory_private,
-        trajectory_public,
-        TrajectoryLimits(max_turns=3, wall_clock_seconds=120, command_timeout_seconds=60),
-        PodmanWorkspaceExecutor(
-            image=task.image,
-            executable=cohort.runtime.executable,
-            cpus=cohort.runtime.cpus,
-            memory_mb=_memory_mb(cohort.runtime.memory),
-        ),
-        context_digest=hashlib.sha256(
-            f"trajectory-v1:{task.instance_id}:{task.base_sha}:{task.image_digest}".encode()
-        ).hexdigest(),
+    model_private = output_root / ".private" / task.instance_id / "model-turns.json"
+    model_public = output_root / "model-loops" / f"{task.instance_id}.json"
+    context_digest = hashlib.sha256(
+        f"model-loop-v1:{task.instance_id}:{task.base_sha}:{task.image_digest}".encode()
+    ).hexdigest()
+    executor = PodmanWorkspaceExecutor(
+        image=task.image,
+        executable=cohort.runtime.executable,
+        cpus=cohort.runtime.cpus,
+        memory_mb=_memory_mb(cohort.runtime.memory),
     )
-    if trajectory.status is not TrajectoryStatus.SUBMITTED:
+    adapter = FakeModelAdapter(
+        [
+            (
+                '{"kind":"command","argv":["git","status","--short"],"cwd":"."}',
+                ModelUsage(12, 8, 0.0),
+            ),
+            ('{"kind":"submit"}', ModelUsage(9, 3, 0.0)),
+        ]
+    )
+    model_loop = run_model_loop(
+        adapter,
+        f"task_id={task.instance_id}; repository={task.repository}; base_sha={task.base_sha}",
+        ModelBudget(max_turns=3, max_input_tokens=100, max_output_tokens=100, max_cost_usd=0.0),
+        lambda action: executor(action, workspace, 60),
+    )
+    model_loop_digest = model_loop.publish(model_private, model_public, context_digest)
+    if model_loop.status is not TrajectoryStatus.SUBMITTED:
         raise HarnessExecutionError(
-            f"synthetic trajectory failed for {task.instance_id}: {trajectory.status.value}"
+            f"synthetic model loop failed for {task.instance_id}: {model_loop.status.value}"
         )
     _run(["git", "-C", str(workspace), "apply", str((source / "fix.patch").resolve())])
     extracted = extract_candidate_patch(workspace, task.base_sha)
@@ -126,7 +136,7 @@ def _run_task(
         "status": result.status.value,
         "reason_code": None if result.reason_code is None else result.reason_code.value,
         "patch_sha256": filtered.sha256,
-        "trajectory_sha256": trajectory.bound_trajectory_sha256,
+        "trajectory_sha256": model_loop_digest,
         "image_digest": result.image_digest,
         "elapsed_seconds": time.monotonic() - started,
         "removed_hidden_paths": list(filtered.removed_paths),
