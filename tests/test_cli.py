@@ -294,6 +294,78 @@ def test_streaming_run_persists_success_when_neighbor_times_out(tmp_path: Path, 
     assert json.loads((run_dir / "cells/treatment/p1.json").read_text())["status"] == "excluded"
 
 
+def test_streaming_harness_error_stops_new_cells_but_drains_active_cell(
+    tmp_path: Path, monkeypatch
+):
+    arms = ("a", "b", "c", "d")
+    pair = {
+        "pair_id": "p1",
+        "question_id": "q1",
+        "sample_index": 0,
+        "order": list(arms),
+    }
+    config = {
+        "arms": {
+            name: {
+                "hermes": {
+                    "model": {"provider": "test", "default": name},
+                    "agent": {"reasoning_effort": "medium"},
+                    "moa": {"enabled": False},
+                }
+            }
+            for name in arms
+        },
+        "execution": {"scheduling": "streaming", "workers": 2},
+        "generation": {"timeout_seconds": 30},
+    }
+    run_dir = tmp_path / "run"
+    both_active = threading.Barrier(2)
+    started = []
+    lock = threading.Lock()
+
+    def fake_prepare(*args, **kwargs):
+        for arm in arms:
+            home = run_dir / "homes" / arm
+            home.mkdir(parents=True)
+            (home / "config.yaml").write_text("moa: {enabled: false}\n")
+        (run_dir / "questions.json").write_text(
+            json.dumps([{"question_id": "q1", "turns": ["prompt"]}])
+        )
+        return {
+            "pairs": [pair],
+            "execution_contract": {
+                "scheduling": "streaming",
+                "effective_workers": 2,
+                "timing_comparable": False,
+            },
+        }
+
+    def fake_invoke(arm_name, *args, **kwargs):
+        with lock:
+            started.append(arm_name)
+        both_active.wait(timeout=1)
+        if arm_name == "a":
+            raise RuntimeError("harness defect")
+        time.sleep(0.05)
+        return {"turns": ["saved"], "total_time_s": 0.05, "stdout_sha256": "hash"}
+
+    monkeypatch.setattr("livebench_hermes_ab.cli.load_config", lambda path: config)
+    monkeypatch.setattr(
+        "livebench_hermes_ab.cli.resolve_hermes_executable", lambda value: "/fake/hermes"
+    )
+    monkeypatch.setattr("livebench_hermes_ab.cli.prepare", fake_prepare)
+    monkeypatch.setattr("livebench_hermes_ab.cli.verify_run_integrity", lambda *args: None)
+    monkeypatch.setattr("livebench_hermes_ab.cli.invoke_arm", fake_invoke)
+
+    with pytest.raises(RuntimeError, match="harness defect"):
+        run(tmp_path / "config.yaml", tmp_path / "source", run_dir)
+
+    assert len(started) == 2
+    assert set(started) == {"a", "b"}
+    assert json.loads((run_dir / "cells/b/p1.json").read_text())["status"] == "valid"
+    assert not (run_dir / "raw/hermes-b.jsonl").exists()
+
+
 def test_wave_invocation_runs_one_worker_per_arm_concurrently(tmp_path: Path):
     arm_names = ("base", "moa_minimax", "moa_mimo")
     barrier = threading.Barrier(len(arm_names))
@@ -788,6 +860,40 @@ def test_hermes_schema_rejects_invalid_reasoning_type():
     }
     with pytest.raises(ContractError, match="arm control.*reasoning_effort"):
         validate_hermes_arm_schema("control", arm, "0.19.1")
+
+
+def test_hermes_schema_accepts_explicit_moa_aggregator_reasoning_without_agent_fallback():
+    arm = {
+        "hermes": {
+            "model": {"provider": "moa", "default": "default"},
+            "agent": {"disabled_toolsets": []},
+            "moa": {
+                "enabled": True,
+                "save_traces": True,
+                "default_preset": "default",
+                "active_preset": "default",
+                "presets": {
+                    "default": {
+                        "enabled": True,
+                        "degraded_reference_policy": "loud",
+                        "reference_max_tokens": 50000,
+                        "max_tokens": 4096,
+                        "fanout": "every_n:3",
+                        "reference_models": [
+                            {"provider": "openrouter", "model": "reference/model"}
+                        ],
+                        "aggregator": {
+                            "provider": "openai-codex",
+                            "model": "gpt-5.6-sol",
+                            "reasoning_effort": "low",
+                        },
+                    }
+                },
+            },
+        }
+    }
+
+    validate_hermes_arm_schema("moa", arm, "0.19.1")
 
 
 def test_hermes_schema_rejects_inline_credential_without_echoing_value():

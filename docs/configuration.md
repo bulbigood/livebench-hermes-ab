@@ -76,8 +76,6 @@ arms:
       model:
         provider: moa
         default: default
-      agent:
-        reasoning_effort: medium
       moa:
         enabled: true
         default_preset: default
@@ -96,10 +94,10 @@ arms:
             aggregator:
               provider: openai-codex
               model: gpt-5.6-sol
-              reasoning_effort: medium
+              reasoning_effort: low
 ```
 
-When changing MoA reasoning effort, inspect both `agent.reasoning_effort` and the active preset's `aggregator.reasoning_effort`. They are separate Hermes-native fields.
+Set MoA aggregator reasoning explicitly on the active preset's `aggregator.reasoning_effort`. Hermes uses `agent.reasoning_effort` only as a fallback when the aggregator slot does not set its own effort; do not duplicate the value in both places. Plain non-MoA arms continue to use `agent.reasoning_effort`.
 
 ### Baseline and workers
 
@@ -110,7 +108,7 @@ execution:
   baseline_arm: base
 ```
 
-`baseline_arm` must name one configured arm. `streaming` is the default: free workers immediately start the next isolated arm-cell without a wave barrier. `workers: auto` resolves to three times the detected CPU count, with a minimum effective CPU count of one and a hard maximum of 32 workers. Explicit values must be integers from 1 through 32.
+`baseline_arm` must name one configured arm. `streaming` is the default: free workers immediately start the next isolated arm-cell without a wave barrier. `workers: auto` resolves to four times the detected CPU count, with a minimum effective CPU count of one and a hard maximum of 32 workers. Explicit values must be integers from 1 through 32.
 
 Use `--balanced-waves` when synchronized paired wall-time evidence is required. The runner rounds effective wave concurrency down to a complete multiple of the arm count and rejects a worker count smaller than the number of arms. Streaming reports mark arm timing with `*`; quality scores remain unmarked when coverage and provenance are valid.
 

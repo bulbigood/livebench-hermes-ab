@@ -67,6 +67,188 @@ def summary_compatibility(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def manifest_arm_order(manifest: dict[str, Any]) -> list[str]:
+    arms = manifest.get("arms")
+    if not isinstance(arms, dict) or not arms:
+        raise ContractError("manifest arms must be a non-empty object")
+    order = manifest.get("arm_order")
+    if order is None:
+        return list(arms)
+    if (
+        not isinstance(order, list)
+        or not all(isinstance(arm, str) and arm for arm in order)
+        or len(order) != len(set(order))
+        or set(order) != set(arms)
+    ):
+        raise ContractError("manifest arm_order must contain every configured arm exactly once")
+    return order
+
+
+def _md(value: Any) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def _number(value: Any, digits: int = 4) -> str:
+    return "—" if value is None else f"{float(value):.{digits}f}"
+
+
+def render_markdown_report(summary: dict[str, Any], manifest: dict[str, Any]) -> str:
+    arms = list(summary["arms"])
+    baseline = str(summary["baseline_arm"])
+    timing = summary["timing"]
+    lines = [
+        "# LiveBench Hermes A/B Report",
+        "",
+        f"**Experiment:** `{_md(manifest.get('experiment_id', 'unknown'))}`  ",
+        f"**Verdict:** `{_md(summary['status'])}`  ",
+        f"**Baseline:** `{_md(baseline)}`  ",
+        (
+            f"**Paired coverage:** {summary['common_valid_pairs']}/{summary['planned_pairs']} "
+            f"({_number(100 * summary['paired_coverage_fraction'], 2)}%)"
+        ),
+        "",
+    ]
+    if not timing.get("paired_wall_time_comparable", False):
+        lines.extend(
+            [
+                "## ⚠ Timing warning",
+                "",
+                (
+                    "This run used **streaming scheduling without balanced arm waves**. Arm timing "
+                    "is throughput telemetry and may be distorted by queue position and resource "
+                    "contention; it is not strict paired wall-time evidence."
+                ),
+                "",
+                (
+                    "For comparable timing, use the same worker count and enable complete-arm "
+                    "wave barriers in both stages:"
+                ),
+                "",
+                "```bash",
+                "livebench-hermes-ab ... prepare --balanced-waves",
+                "livebench-hermes-ab ... run --balanced-waves",
+                "```",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "## Timing methodology",
+                "",
+                (
+                    "Timing was collected with synchronized complete-arm wave barriers and is "
+                    "marked as comparable paired wall-time evidence."
+                ),
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Results by arm",
+            "",
+            "Arms are listed in the order declared by the experiment configuration.",
+            "",
+            "| Arm | Role | Mean score | Δ vs baseline | Wins | Ties | Regressions | Valid cells |",
+            "|---|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for arm in arms:
+        coverage = summary["arm_coverage"][arm]
+        comparison = summary["comparisons_vs_baseline"].get(arm)
+        if comparison is None:
+            delta, wins, ties, regressions = "—", "—", "—", "—"
+            role = "baseline"
+        else:
+            delta = _number(comparison["absolute_delta"])
+            wins = str(comparison["wins"])
+            ties = str(comparison["ties"])
+            regressions = str(comparison["regressions"])
+            role = "comparison"
+        lines.append(
+            f"| `{_md(arm)}` | {role} | {_number(summary['arm_means'][arm])} | {delta} | "
+            f"{wins} | {ties} | {regressions} | {coverage['valid_cells']}/{coverage['planned_cells']} |"
+        )
+    categories = sorted(
+        {category for arm in arms for category in summary["category_means"].get(arm, {})}
+    )
+    lines.extend(
+        [
+            "",
+            "## Category means",
+            "",
+            "| Category | " + " | ".join(f"`{_md(arm)}`" for arm in arms) + " |",
+            "|---|" + "---:|" * len(arms),
+        ]
+    )
+    for category in categories:
+        values = [_number(summary["category_means"].get(arm, {}).get(category)) for arm in arms]
+        lines.append(f"| {_md(category)} | " + " | ".join(values) + " |")
+    lines.extend(
+        [
+            "",
+            "## Coverage and exclusions",
+            "",
+            f"- Planned cells: **{summary['planned_cells']}**",
+            f"- Valid arm-cells: **{summary['valid_cells']}**",
+            f"- Excluded arm-cells: **{summary['excluded_cells']}**",
+            f"- Common valid pairs used for comparisons: **{summary['common_valid_pairs']}**",
+            "",
+        ]
+    )
+    exclusions = summary.get("exclusions", [])
+    if exclusions:
+        lines.extend(
+            [
+                "| Arm | Question | Sample | Code | Diagnostic |",
+                "|---|---|---:|---|---|",
+            ]
+        )
+        arm_position = {arm: index for index, arm in enumerate(arms)}
+        for item in sorted(
+            exclusions,
+            key=lambda item: (
+                arm_position.get(str(item["arm"]), len(arms)),
+                str(item["question_id"]),
+                int(item["sample_index"]),
+            ),
+        ):
+            lines.append(
+                f"| `{_md(item['arm'])}` | `{_md(item['question_id'])}` | "
+                f"{item['sample_index']} | `{_md(item['code'])}` | {_md(item['reason'])} |"
+            )
+    else:
+        lines.append("No cells were excluded.")
+    compatibility = summary.get("hermes_compatibility", {})
+    lines.extend(
+        [
+            "",
+            "## Execution and provenance",
+            "",
+            f"- Scheduling: `{_md(manifest.get('execution_contract', {}).get('scheduling', 'unknown'))}`",
+            f"- Run makespan: {_number(timing.get('run_makespan_seconds'), 3)} seconds",
+            f"- Hermes compatibility: `{_md(compatibility.get('status', 'unknown'))}`",
+            f"- Hermes version: `{_md(compatibility.get('version', 'unknown'))}`",
+            f"- Scores SHA-256: `{_md(summary['scores_sha256'])}`",
+            "",
+            "## Machine-readable evidence",
+            "",
+            "- [`summary.json`](summary.json)",
+            "- [`scores.json`](scores.json)",
+            "- [`paired-deltas.json`](paired-deltas.json)",
+            "- [`exclusions.json`](exclusions.json)",
+            "- [`manifest.json`](manifest.json)",
+        ]
+    )
+    for arm in arms:
+        hermes = manifest.get("arms", {}).get(arm, {}).get("hermes", {})
+        if hermes.get("moa", {}).get("enabled"):
+            filename = "trace-audit.json" if arm == "moa" else f"trace-audit-{arm}.json"
+            lines.append(f"- [`{filename}`]({filename})")
+    lines.append("")
+    return "\n".join(lines)
+
+
 ROOT = Path(__file__).resolve().parents[2]
 UPSTREAM = ROOT / "upstream"
 if str(UPSTREAM) not in sys.path:
@@ -213,7 +395,7 @@ def score_run(run_dir: Path) -> dict[str, Any]:
         if not excluded.issubset(expected):
             raise ContractError("excluded cell is outside frozen matrix")
     effective = expected - excluded
-    arm_names = list(manifest["arms"])
+    arm_names = manifest_arm_order(manifest)
     if any("hermes" in arm for arm in manifest["arms"].values()):
         return score_multiarm_run(run_dir, by_id, manifest, expected, arm_names, excluded)
     records = {
@@ -551,4 +733,5 @@ def score_multiarm_run(
     (run_dir / "scores.json").write_bytes(canonical_json(scores) + b"\n")
     (run_dir / "paired-deltas.json").write_bytes(canonical_json(cells) + b"\n")
     (run_dir / "summary.json").write_bytes(canonical_json(summary) + b"\n")
+    (run_dir / "report.md").write_text(render_markdown_report(summary, manifest), encoding="utf-8")
     return summary

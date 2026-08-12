@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -333,7 +333,6 @@ def validate_hermes_arm_schema(arm_name: str, arm: dict[str, Any], profile: str)
 
     provider = _require_nonempty_string(arm_name, "model.provider", model.get("provider"))
     _require_nonempty_string(arm_name, "model.default", model.get("default"))
-    _validate_reasoning(arm_name, "agent.reasoning_effort", agent.get("reasoning_effort"))
     disabled = agent.get("disabled_toolsets", [])
     if not isinstance(disabled, list) or not all(isinstance(item, str) for item in disabled):
         raise ContractError(f"arm {arm_name} Hermes agent.disabled_toolsets must be strings")
@@ -347,6 +346,7 @@ def validate_hermes_arm_schema(arm_name: str, arm: dict[str, Any], profile: str)
     if not enabled:
         if provider == "moa":
             raise ContractError(f"arm {arm_name} uses provider moa but Hermes moa.enabled is false")
+        _validate_reasoning(arm_name, "agent.reasoning_effort", agent.get("reasoning_effort"))
         return
     if provider != "moa":
         raise ContractError(f"arm {arm_name} enables MoA but model.provider is not moa")
@@ -390,6 +390,27 @@ def validate_hermes_arm_schema(arm_name: str, arm: dict[str, Any], profile: str)
                 f"moa.presets.{active}.{slot_path}.reasoning_effort",
                 slot["reasoning_effort"],
             )
+        elif slot_path == "aggregator" and "reasoning_effort" not in agent:
+            raise ContractError(
+                f"arm {arm_name} Hermes MoA aggregator needs reasoning_effort or an "
+                "agent.reasoning_effort fallback"
+            )
+
+
+def arm_reasoning_effort(arm: dict[str, Any]) -> str:
+    hermes = arm_hermes_config(arm)
+    moa = hermes.get("moa", {})
+    if moa.get("enabled"):
+        active = str(moa.get("active_preset") or moa.get("default_preset") or "default")
+        aggregator = moa.get("presets", {}).get(active, {}).get("aggregator", {})
+        value = aggregator.get("reasoning_effort")
+        if value is None:
+            value = hermes.get("agent", {}).get("reasoning_effort")
+    else:
+        value = hermes.get("agent", {}).get("reasoning_effort")
+    if not isinstance(value, str) or not value.strip():
+        raise ContractError("incomplete Hermes reasoning config")
+    return value.strip()
 
 
 def arm_hermes_config(arm: dict[str, Any]) -> dict[str, Any]:
@@ -430,7 +451,7 @@ def arm_identity(arm: dict[str, Any]) -> tuple[str, str, str]:
         return (
             str(hermes["model"]["provider"]),
             str(hermes["model"]["default"]),
-            str(hermes["agent"]["reasoning_effort"]),
+            arm_reasoning_effort(arm),
         )
     except KeyError as error:
         raise ContractError(f"incomplete Hermes model/agent config: missing {error}") from error
@@ -715,6 +736,7 @@ def prepare(
             ),
         },
         "cell_journal_schema_version": 1,
+        "arm_order": list(config["arms"]),
         "arms": config["arms"],
     }
     (run_dir / "manifest.json").write_bytes(canonical_json(manifest) + b"\n")
@@ -730,6 +752,14 @@ def verify_run_integrity(config_path: Path, run_dir: Path, manifest: dict[str, A
         != manifest["questions_sha256"]
     ):
         raise ContractError("selected questions drift after prepare")
+    arm_order = manifest.get("arm_order")
+    manifest_arms = manifest.get("arms", {})
+    if arm_order is not None and (
+        not isinstance(arm_order, list)
+        or len(arm_order) != len(set(arm_order))
+        or set(arm_order) != set(manifest_arms)
+    ):
+        raise ContractError("manifest arm_order is invalid")
     for arm, expected in manifest["home_config_sha256"].items():
         actual = sha256_bytes((run_dir / "homes" / arm / "config.yaml").read_bytes())
         if actual != expected:
@@ -894,9 +924,10 @@ def probe_hermes_compatibility(
         expected: dict[str, Any] = {
             "model.provider": hermes_cfg["model"]["provider"],
             "model.default": hermes_cfg["model"]["default"],
-            "agent.reasoning_effort": hermes_cfg["agent"]["reasoning_effort"],
             "moa.enabled": hermes_cfg["moa"]["enabled"],
         }
+        if "reasoning_effort" in hermes_cfg["agent"]:
+            expected["agent.reasoning_effort"] = hermes_cfg["agent"]["reasoning_effort"]
         if hermes_cfg["moa"]["enabled"]:
             expected["moa.active_preset"] = hermes_cfg["moa"]["active_preset"]
         effective: dict[str, Any] = {}
@@ -928,6 +959,8 @@ def probe_hermes_compatibility(
                     f"Path: {key}\nExpected: {expected_value!r}\nActual: {actual_value!r}"
                 )
             effective[key] = actual_value
+        if hermes_cfg["moa"]["enabled"]:
+            effective["moa.aggregator.reasoning_effort"] = arm_reasoning_effort(arm)
         prompt_command = [resolved, "prompt-size", "--json"]
         prompt_result = _run_probe_command(
             command_runner,
@@ -1333,12 +1366,36 @@ def execute_cells(
 
     for wave in waves:
         start_barrier = threading.Barrier(len(wave)) if scheduling == "balanced_waves" else None
-        with ThreadPoolExecutor(
-            max_workers=min(workers, len(wave)), thread_name_prefix="livebench-cell"
-        ) as executor:
-            futures = [executor.submit(execute_cell, cell, start_barrier) for cell in wave]
-            for future in futures:
-                future.result()
+        max_workers = min(workers, len(wave))
+        executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="livebench-cell")
+        pending = set()
+        cells_iter = iter(wave)
+        harness_error: Exception | None = None
+        try:
+            for _ in range(max_workers):
+                cell = next(cells_iter, None)
+                if cell is not None:
+                    pending.add(executor.submit(execute_cell, cell, start_barrier))
+            while pending and harness_error is None:
+                completed, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in completed:
+                    error = future.exception()
+                    if error is not None and harness_error is None:
+                        harness_error = error
+                if harness_error is None:
+                    for _ in range(len(completed)):
+                        cell = next(cells_iter, None)
+                        if cell is not None:
+                            pending.add(executor.submit(execute_cell, cell, start_barrier))
+            if harness_error is not None:
+                for future in pending:
+                    future.cancel()
+                for future in pending:
+                    if not future.cancelled():
+                        future.exception()
+                raise harness_error
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
     finalize_outcomes(run_dir, manifest, tuple(config["arms"]))
     history = list(manifest.get("execution_attempts") or [])
     history.append(

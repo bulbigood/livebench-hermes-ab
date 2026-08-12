@@ -4,11 +4,12 @@ Compare multiple [Hermes Agent](https://hermes-agent.nousresearch.com/) configur
 
 The default experiment compares:
 
-- `base`: plain Hermes using OpenAI Codex;
-- `moa_minimax`: the same aggregator plus `minimax/minimax-m3` through OpenRouter;
-- `moa_mimo`: the same aggregator plus `xiaomi/mimo-v2.5` through OpenRouter.
+- `base`: plain `openai-codex/gpt-5.6-sol` with `low` reasoning;
+- `gpt_medium`: plain `openai-codex/gpt-5.6-sol` with `medium` reasoning;
+- `moa_minimax`: a `low`-reasoning `gpt-5.6-sol` aggregator plus `minimax/minimax-m3` through OpenRouter;
+- `moa_mimo`: a `low`-reasoning `gpt-5.6-sol` aggregator plus `xiaomi/mimo-v2.5` through OpenRouter;
 
-It runs 15 tasks × 5 samples = **75 cells per arm**. The three arms produce **225 arm-cell invocations**. Including one reference call for each MoA cell, the default configuration expects **375 provider model calls in total**. Model calls may cost money.
+It runs 15 tasks × 5 samples = **75 cells per arm**. The four arms produce **300 arm-cell invocations**. Including one reference call for each MoA cell, the default configuration expects **450 provider model calls in total**. `base` isolates the low-reasoning aggregator from the contribution of each MoA reference model, while `gpt_medium` measures the reasoning-level change. Model calls may cost money.
 
 > **Safe rule:** always run `prepare` first. It makes no model calls and prints the exact planned call count. Run `run` only after checking that output.
 
@@ -117,7 +118,7 @@ print(json.dumps(manifest["expected_model_calls"], indent=2))
 PY
 ```
 
-For the unchanged default config, `expected_cells` should be `225` and `expected_model_calls.total` should be `375`. Stop here if the arms, scenarios, or call count are not what you intended.
+For the unchanged default config, `expected_cells` should be `300` and `expected_model_calls.total` should be `450`. Stop here if the arms, scenarios, or call count are not what you intended.
 
 ### 6. Run the benchmark — this makes model calls
 
@@ -150,6 +151,8 @@ The default scheduler is streaming: each free worker immediately starts the next
 
 Every completed cell writes an atomic journal entry under `cells/<arm>/<pair-id>.json`. A cell-local timeout, provider failure, empty response, or degraded MoA trace is preserved as an explicit reason-coded exclusion. The scorer reports arm-local coverage and computes paired means and deltas only on the intersection of valid `(question_id, sample_index)` identities across all compared arms. Missing cells without a matching exclusion remain fatal, as do malformed manifests, provenance drift, corrupt journals, and unlocalized harness failures.
 
+An unexpected harness failure stops admission of new cells immediately and cancels queued work that has not started. Already active provider calls are not killed: the runner drains them, atomically preserves any completed outcomes, skips final consolidation and scoring, and exits nonzero. After the harness fault is corrected, `resume` runs only the cells that never received a terminal outcome.
+
 `exclusions.json` and `summary.json` retain the excluded cell identity, arm, reason, resulting coverage, and scoring status. Failed artifacts are never replaced or silently imputed. Hermes 0.19.1 does not persist reference-phase timestamps, so reported MoA cell duration includes the reference, aggregator, and local overhead; it is not presented as exact reference-model latency.
 
 For comparable paired wall time, opt into complete-arm waves during both preflight and execution:
@@ -171,11 +174,18 @@ uv run livebench-hermes-ab --config config.yaml score \
 The command prints the summary and writes:
 
 ```text
+runs/default/report.md
 runs/default/summary.json
 runs/default/scores.json
 runs/default/paired-deltas.json
 runs/default/trace-audit.json
 ```
+
+`report.md` is the human-readable final report. Its result, category, timing, and exclusion
+tables list arms in the exact order declared under `arms:` in the experiment YAML; the manifest
+freezes that sequence as `arm_order`. Streaming runs carry a prominent timing warning and show
+the `--balanced-waves` flags required on both `prepare` and `run` for comparable paired wall-time
+evidence. A failed or incomplete harness run is not scored and does not receive a final report.
 
 To start over, use a different run directory such as `runs/default-2`. Existing answer files are intentionally not overwritten.
 

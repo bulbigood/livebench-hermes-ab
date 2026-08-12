@@ -66,7 +66,7 @@ Properties:
 
 Parallelism is an execution condition, not a model treatment. It may affect latency, throttling, or provider scheduling.
 
-Before each invocation, the runner verifies frozen config, selected questions, and generated Hermes config hashes. Every terminal cell outcome is written atomically before run-level consolidation. A timeout or known model/provider failure becomes a reason-coded cell exclusion; an unexpected harness exception still fails the run, while completed journals remain durable. Records and exclusions are consolidated in manifest order rather than concurrent completion order.
+Before each invocation, the runner verifies frozen config, selected questions, and generated Hermes config hashes. Every terminal cell outcome is written atomically before run-level consolidation. A timeout or known model/provider failure becomes a reason-coded cell exclusion. An unexpected harness exception stops admission of new cells, cancels queued work that has not started, drains already active provider calls without killing them, preserves their completed journals, skips final consolidation, and fails the run. Records and exclusions from successful execution are consolidated in manifest order rather than concurrent completion order.
 
 The absolute Hermes executable recorded during `prepare` is also used for every model call. This prevents probing one installation and accidentally executing another from `PATH`.
 
@@ -111,6 +111,7 @@ runs/<run>/cells/<arm>/<pair-id>.json
 runs/<run>/attempts/<arm>/<pair-id>/<attempt>-previous/
 runs/<run>/exclusions.json
 runs/<run>/raw/hermes-<arm>.jsonl
+runs/<run>/report.md
 runs/<run>/scores.json
 runs/<run>/paired-deltas.json
 runs/<run>/summary.json
@@ -128,6 +129,11 @@ uv run livebench-hermes-ab --config config.yaml score \
 ```
 
 Scoring is local and deterministic. It uses pinned LiveBench objective processors and makes no judge-model calls. It revalidates persisted MoA traces before computing scores, so an older or stale trace audit cannot bypass the current validation contract.
+
+`report.md` is the human-readable final artifact. It includes the verdict, arm results, category
+means, common coverage, exclusions, timing methodology, provenance, and links to the JSON
+evidence. Arm-oriented tables follow the exact YAML declaration order frozen in manifest
+`arm_order`. The scorer rejects a malformed order instead of silently sorting or omitting arms.
 
 Compatibility warnings are copied from `manifest.json` into `summary.json`. A complete run made with a mismatched Hermes version is labeled `VALID_WITH_HERMES_WARNING`; objective scores remain available, but the result is not presented as a verified reproduction.
 
@@ -178,6 +184,7 @@ The manifest freezes:
 - question-file hashes;
 - resolved scenario order and hash;
 - selected question hash;
+- arm declaration order;
 - generated per-arm Hermes config hashes;
 - Hermes compatibility evidence;
 - samples, retries, timeout, baseline, concurrency, and call-count scope.
@@ -190,7 +197,7 @@ It cannot freeze:
 - quotas and throttling;
 - pricing.
 
-`run_makespan_seconds` is the elapsed duration of the complete execution. `sum_cell_seconds` is a sum of overlapping subprocess durations and is not wall time. Streaming summaries mark arm timing with `*` and set `paired_wall_time_comparable: false`; the note states that non-strict scheduling is not paired arm wall-time evidence. Balanced-wave timing has no marker. Quality scores are not automatically invalidated by the timing marker when exact coverage and provenance remain valid. Do not report USD cost unless provider prices and complete token telemetry are available.
+`run_makespan_seconds` is the elapsed duration of the complete execution. `sum_cell_seconds` is a sum of overlapping subprocess durations and is not wall time. Streaming summaries mark arm timing with `*` and set `paired_wall_time_comparable: false`; `report.md` prominently warns that queue position and resource contention can distort arm timing and directs the operator to pass `--balanced-waves` to both `prepare` and `run`. Balanced-wave timing is described as synchronized complete-arm wave evidence. Quality scores are not automatically invalidated by the timing marker when exact coverage and provenance remain valid. Do not report USD cost unless provider prices and complete token telemetry are available.
 
 ## Security boundaries
 

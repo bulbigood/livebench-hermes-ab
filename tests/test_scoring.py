@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 
 from livebench_hermes_ab.core import ContractError
-from livebench_hermes_ab.scoring import score_run, score_standard, summary_status, timing_summary
+from livebench_hermes_ab.scoring import (
+    render_markdown_report,
+    score_run,
+    score_standard,
+    summary_status,
+    timing_summary,
+)
 
 
 def test_cta_oracle_exact_match():
@@ -182,6 +188,7 @@ def _write_two_arm_fixture(run: Path) -> None:
             "base": {"hermes": {"moa": {"enabled": False}}},
             "treatment": {"hermes": {"moa": {"enabled": False}}},
         },
+        "arm_order": ["treatment", "base"],
         "execution_contract": {
             "baseline_arm": "base",
             "scheduling": "streaming",
@@ -226,6 +233,61 @@ def test_multiarm_scoring_uses_common_valid_coverage_and_reports_exclusions(tmp_
     assert summary["paired_coverage_fraction"] == 0.5
     assert summary["arm_coverage"]["base"]["valid_cells"] == 2
     assert summary["arm_coverage"]["treatment"]["valid_cells"] == 1
+    assert summary["arms"] == ["treatment", "base"]
+    report = (run / "report.md").read_text()
+    treatment_row = report.index("| `treatment` |")
+    base_row = report.index("| `base` |")
+    assert treatment_row < base_row
+    assert "## ⚠ Timing warning" in report
+    assert "prepare --balanced-waves" in report
+    assert "run --balanced-waves" in report
+
+
+def test_markdown_report_marks_balanced_wave_timing_as_comparable():
+    manifest = {
+        "experiment_id": "example",
+        "execution_contract": {"scheduling": "balanced_waves", "timing_comparable": True},
+    }
+    summary = {
+        "status": "VALID",
+        "baseline_arm": "base",
+        "arms": ["base"],
+        "planned_pairs": 1,
+        "common_valid_pairs": 1,
+        "paired_coverage_fraction": 1.0,
+        "planned_cells": 1,
+        "valid_cells": 1,
+        "excluded_cells": 0,
+        "arm_coverage": {"base": {"planned_cells": 1, "valid_cells": 1, "excluded_cells": 0}},
+        "arm_means": {"base": 1.0},
+        "comparisons_vs_baseline": {},
+        "category_means": {"base": {"reasoning": 1.0}},
+        "timing": {
+            "paired_wall_time_comparable": True,
+            "run_makespan_seconds": 1.0,
+            "arms": {"base": {"mean_cell_seconds": 1.0, "sum_cell_seconds": 1.0, "cells": 1}},
+        },
+        "exclusions": [],
+        "hermes_compatibility": {"status": "verified", "version": "0.19.1"},
+        "scores_sha256": "abc",
+    }
+
+    report = render_markdown_report(summary, manifest)
+
+    assert "## ⚠ Timing warning" not in report
+    assert "complete-arm wave barriers" in report
+
+
+def test_scoring_rejects_manifest_arm_order_drift(tmp_path: Path):
+    run = tmp_path / "run"
+    _write_two_arm_fixture(run)
+    manifest_path = run / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["arm_order"] = ["base", "unknown"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ContractError, match="arm_order"):
+        score_run(run)
 
 
 def test_multiarm_scoring_rejects_unexplained_missing_cell(tmp_path: Path):
