@@ -1,0 +1,58 @@
+from pathlib import Path
+
+import pytest
+
+from livebench_hermes_ab.config import load_config, parse_config
+from livebench_hermes_ab.domain import ConfigError, ExclusionCode
+
+
+def test_default_config_is_strict_typed_and_ordered() -> None:
+    config = load_config(Path("config.yaml"))
+    assert tuple(arm.name for arm in config.arms) == (
+        "base",
+        "gpt_medium",
+        "moa_minimax",
+        "moa_mimo",
+    )
+    assert config.baseline_arm == "base"
+    assert config.execution.mode == "streaming"
+    assert config.scoring.schema_version == 2
+    assert config.generation.retry.retryable_codes == frozenset()
+
+
+def test_unknown_and_legacy_config_fail_closed() -> None:
+    with pytest.raises(ConfigError, match="unsupported keys"):
+        parse_config({"experiment": {}, "legacy": True})
+    with pytest.raises(ConfigError, match="required keys"):
+        parse_config({"generation": {"retries": 2}})
+
+
+def test_retry_codes_are_enum_values() -> None:
+    config = load_config(Path("config.yaml"))
+    assert ExclusionCode.CELL_TIMEOUT not in config.generation.retry.retryable_codes
+
+
+def test_unknown_nested_arm_key_fails_closed() -> None:
+    import yaml
+
+    value = yaml.safe_load(Path("config.yaml").read_text())
+    value["arms"]["base"]["hermes"]["model"]["legacy_model"] = "ignored"
+    with pytest.raises(ConfigError, match="unsupported keys"):
+        parse_config(value)
+
+
+def test_balanced_workers_must_be_explicit_multiple_of_arm_count() -> None:
+    import yaml
+
+    value = yaml.safe_load(Path("config.yaml").read_text())
+    value["execution"]["mode"] = "balanced_waves"
+    value["execution"]["workers"] = 7
+    with pytest.raises(ConfigError, match="multiple of the 4 arms"):
+        parse_config(value)
+
+    value["execution"]["workers"] = 8
+    assert parse_config(value).execution.workers == 8
+
+    value["execution"]["workers"] = "auto"
+    with pytest.raises(ConfigError, match="requires an explicit worker count"):
+        parse_config(value)

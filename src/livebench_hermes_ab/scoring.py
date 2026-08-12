@@ -1,737 +1,218 @@
 from __future__ import annotations
 
 import json
-import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType
 
-from .core import ContractError, canonical_json, sha256_bytes
-from .trace_validation import validate_moa_trace_record
+from .artifacts import ScoringBundle
+from .domain import CellOutcome, ExcludedOutcome, IntegrityError, ValidOutcome
+from .trace_validation import ExpectedTrace, validate_cell_trace
 
-
-def summary_status(manifest: dict[str, Any], excluded: bool) -> str:
-    compatibility_status = manifest.get("hermes_compatibility", {}).get("status")
-    hermes_warning = compatibility_status != "verified"
-    if excluded and hermes_warning:
-        return "VALID_WITH_ONE_INFRA_EXCLUSION_AND_HERMES_WARNING"
-    if excluded:
-        return "VALID_WITH_ONE_INFRA_EXCLUSION"
-    if hermes_warning:
-        return "VALID_WITH_HERMES_WARNING"
-    return "VALID"
+ScoreAdapter = Callable[[Mapping[str, object], str], float]
 
 
-def timing_summary(
-    manifest: dict[str, Any],
-    answers_by_arm: dict[str, Any],
-) -> dict[str, Any]:
-    execution = manifest.get("execution_contract", {})
-    comparable = bool(execution.get("timing_comparable", False))
-    arms: dict[str, dict[str, float | int]] = {}
-    for arm_name, rows in answers_by_arm.items():
-        iterable = rows.values() if isinstance(rows, dict) else rows
-        values = [
-            float(row["total_time_s"]) for row in iterable if row.get("total_time_s") is not None
-        ]
-        if values:
-            arms[arm_name] = {
-                "samples": len(values),
-                "mean_cell_seconds": sum(values) / len(values),
-                "sum_cell_seconds": sum(values),
-            }
-    return {
-        "scheduling": execution.get("scheduling", "legacy"),
-        "effective_workers": execution.get("effective_workers"),
-        "paired_wall_time_comparable": comparable,
-        "marker": None if comparable else "*",
-        "note": execution.get("timing_note"),
-        "run_makespan_seconds": manifest.get("execution_result", {}).get("run_makespan_seconds"),
-        "arms": arms,
-    }
+@dataclass(frozen=True, slots=True)
+class QuestionEvidence:
+    category: str
+    task: str
+    raw: Mapping[str, object]
 
 
-def summary_compatibility(manifest: dict[str, Any]) -> dict[str, Any]:
-    report = manifest.get("hermes_compatibility", {})
-    return {
-        key: report[key]
-        for key in (
-            "status",
-            "profile",
-            "version",
-            "executable",
-            "warning_codes",
-            "warnings",
-        )
-        if key in report
-    }
+@dataclass(frozen=True, slots=True)
+class FrozenRun:
+    arm_order: tuple[str, ...]
+    baseline_arm: str
+    planned_pairs: tuple[str, ...]
+    outcomes: tuple[CellOutcome, ...]
+    questions: Mapping[str, QuestionEvidence]
 
 
-def manifest_arm_order(manifest: dict[str, Any]) -> list[str]:
-    arms = manifest.get("arms")
-    if not isinstance(arms, dict) or not arms:
-        raise ContractError("manifest arms must be a non-empty object")
-    order = manifest.get("arm_order")
-    if order is None:
-        return list(arms)
-    if (
-        not isinstance(order, list)
-        or not all(isinstance(arm, str) and arm for arm in order)
-        or len(order) != len(set(order))
-        or set(order) != set(arms)
-    ):
-        raise ContractError("manifest arm_order must contain every configured arm exactly once")
-    return order
+@dataclass(frozen=True, slots=True)
+class ScoreRow:
+    pair_id: str
+    question_id: str
+    arm: str
+    score: float
 
 
-def _md(value: Any) -> str:
-    return str(value).replace("|", "\\|").replace("\n", " ")
+@dataclass(frozen=True, slots=True)
+class ScoringResult:
+    arm_order: tuple[str, ...]
+    baseline_arm: str
+    planned_pairs: int
+    common_pairs: tuple[str, ...]
+    rows: tuple[ScoreRow, ...]
+    arm_means: Mapping[str, float]
+    comparisons: Mapping[str, float]
+    exclusion_counts: Mapping[str, int]
+    trace_audit: Mapping[str, int]
 
 
-def _number(value: Any, digits: int = 4) -> str:
-    return "—" if value is None else f"{float(value):.{digits}f}"
-
-
-def render_markdown_report(summary: dict[str, Any], manifest: dict[str, Any]) -> str:
-    arms = list(summary["arms"])
-    baseline = str(summary["baseline_arm"])
-    timing = summary["timing"]
-    lines = [
-        "# LiveBench Hermes A/B Report",
-        "",
-        f"**Experiment:** `{_md(manifest.get('experiment_id', 'unknown'))}`  ",
-        f"**Verdict:** `{_md(summary['status'])}`  ",
-        f"**Baseline:** `{_md(baseline)}`  ",
-        (
-            f"**Paired coverage:** {summary['common_valid_pairs']}/{summary['planned_pairs']} "
-            f"({_number(100 * summary['paired_coverage_fraction'], 2)}%)"
-        ),
-        "",
+def reconcile_scoring_evidence(
+    run: FrozenRun,
+) -> tuple[tuple[str, ...], Mapping[tuple[str, str], ValidOutcome]]:
+    if run.baseline_arm not in run.arm_order or not run.arm_order:
+        raise IntegrityError("invalid arm order or baseline")
+    planned = set(run.planned_pairs)
+    if len(planned) != len(run.planned_pairs):
+        raise IntegrityError("duplicate planned pair")
+    terminal: dict[tuple[str, str], CellOutcome] = {}
+    for outcome in run.outcomes:
+        key = (outcome.cell.arm, outcome.cell.pair_id)
+        if outcome.cell.arm not in run.arm_order or outcome.cell.pair_id not in planned:
+            raise IntegrityError("outcome outside planned matrix")
+        if key in terminal:
+            raise IntegrityError("duplicate terminal outcome")
+        terminal[key] = outcome
+    missing = [
+        (arm, pair)
+        for arm in run.arm_order
+        for pair in run.planned_pairs
+        if (arm, pair) not in terminal
     ]
-    if not timing.get("paired_wall_time_comparable", False):
-        lines.extend(
-            [
-                "## ⚠ Timing warning",
-                "",
-                (
-                    "This run used **streaming scheduling without balanced arm waves**. Arm timing "
-                    "is throughput telemetry and may be distorted by queue position and resource "
-                    "contention; it is not strict paired wall-time evidence."
-                ),
-                "",
-                (
-                    "For comparable timing, use the same worker count and enable complete-arm "
-                    "wave barriers in both stages:"
-                ),
-                "",
-                "```bash",
-                "livebench-hermes-ab ... prepare --balanced-waves",
-                "livebench-hermes-ab ... run --balanced-waves",
-                "```",
-                "",
-            ]
-        )
-    else:
-        lines.extend(
-            [
-                "## Timing methodology",
-                "",
-                (
-                    "Timing was collected with synchronized complete-arm wave barriers and is "
-                    "marked as comparable paired wall-time evidence."
-                ),
-                "",
-            ]
-        )
-    lines.extend(
-        [
-            "## Results by arm",
-            "",
-            "Arms are listed in the order declared by the experiment configuration.",
-            "",
-            "| Arm | Role | Mean score | Δ vs baseline | Wins | Ties | Regressions | Valid cells |",
-            "|---|---|---:|---:|---:|---:|---:|---:|",
-        ]
+    if missing:
+        raise IntegrityError(f"missing terminal outcomes: {len(missing)}")
+    valid = {key: value for key, value in terminal.items() if isinstance(value, ValidOutcome)}
+    common = tuple(
+        pair for pair in run.planned_pairs if all((arm, pair) in valid for arm in run.arm_order)
     )
-    for arm in arms:
-        coverage = summary["arm_coverage"][arm]
-        comparison = summary["comparisons_vs_baseline"].get(arm)
-        if comparison is None:
-            delta, wins, ties, regressions = "—", "—", "—", "—"
-            role = "baseline"
-        else:
-            delta = _number(comparison["absolute_delta"])
-            wins = str(comparison["wins"])
-            ties = str(comparison["ties"])
-            regressions = str(comparison["regressions"])
-            role = "comparison"
-        lines.append(
-            f"| `{_md(arm)}` | {role} | {_number(summary['arm_means'][arm])} | {delta} | "
-            f"{wins} | {ties} | {regressions} | {coverage['valid_cells']}/{coverage['planned_cells']} |"
-        )
-    categories = sorted(
-        {category for arm in arms for category in summary["category_means"].get(arm, {})}
-    )
-    lines.extend(
-        [
-            "",
-            "## Category means",
-            "",
-            "| Category | " + " | ".join(f"`{_md(arm)}`" for arm in arms) + " |",
-            "|---|" + "---:|" * len(arms),
-        ]
-    )
-    for category in categories:
-        values = [_number(summary["category_means"].get(arm, {}).get(category)) for arm in arms]
-        lines.append(f"| {_md(category)} | " + " | ".join(values) + " |")
-    lines.extend(
-        [
-            "",
-            "## Coverage and exclusions",
-            "",
-            f"- Planned cells: **{summary['planned_cells']}**",
-            f"- Valid arm-cells: **{summary['valid_cells']}**",
-            f"- Excluded arm-cells: **{summary['excluded_cells']}**",
-            f"- Common valid pairs used for comparisons: **{summary['common_valid_pairs']}**",
-            "",
-        ]
-    )
-    exclusions = summary.get("exclusions", [])
-    if exclusions:
-        lines.extend(
-            [
-                "| Arm | Question | Sample | Code | Diagnostic |",
-                "|---|---|---:|---|---|",
-            ]
-        )
-        arm_position = {arm: index for index, arm in enumerate(arms)}
-        for item in sorted(
-            exclusions,
-            key=lambda item: (
-                arm_position.get(str(item["arm"]), len(arms)),
-                str(item["question_id"]),
-                int(item["sample_index"]),
-            ),
-        ):
-            lines.append(
-                f"| `{_md(item['arm'])}` | `{_md(item['question_id'])}` | "
-                f"{item['sample_index']} | `{_md(item['code'])}` | {_md(item['reason'])} |"
-            )
-    else:
-        lines.append("No cells were excluded.")
-    compatibility = summary.get("hermes_compatibility", {})
-    lines.extend(
-        [
-            "",
-            "## Execution and provenance",
-            "",
-            f"- Scheduling: `{_md(manifest.get('execution_contract', {}).get('scheduling', 'unknown'))}`",
-            f"- Run makespan: {_number(timing.get('run_makespan_seconds'), 3)} seconds",
-            f"- Hermes compatibility: `{_md(compatibility.get('status', 'unknown'))}`",
-            f"- Hermes version: `{_md(compatibility.get('version', 'unknown'))}`",
-            f"- Scores SHA-256: `{_md(summary['scores_sha256'])}`",
-            "",
-            "## Machine-readable evidence",
-            "",
-            "- [`summary.json`](summary.json)",
-            "- [`scores.json`](scores.json)",
-            "- [`paired-deltas.json`](paired-deltas.json)",
-            "- [`exclusions.json`](exclusions.json)",
-            "- [`manifest.json`](manifest.json)",
-        ]
-    )
-    for arm in arms:
-        hermes = manifest.get("arms", {}).get(arm, {}).get("hermes", {})
-        if hermes.get("moa", {}).get("enabled"):
-            filename = "trace-audit.json" if arm == "moa" else f"trace-audit-{arm}.json"
-            lines.append(f"- [`{filename}`]({filename})")
-    lines.append("")
-    return "\n".join(lines)
+    if not common:
+        raise IntegrityError("no common valid pairs remain")
+    return common, MappingProxyType(valid)
 
 
-ROOT = Path(__file__).resolve().parents[2]
-UPSTREAM = ROOT / "upstream"
-if str(UPSTREAM) not in sys.path:
-    sys.path.insert(0, str(UPSTREAM))
-
-
-def _load_answers(path: Path) -> dict[tuple[str, int], dict[str, Any]]:
-    if not path.is_file():
-        raise ContractError(f"missing answer file: {path}")
-    rows: dict[tuple[str, int], dict[str, Any]] = {}
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            row = json.loads(line)
-            qid = str(row["question_id"])
-            sample_index = int(row.get("sample_index", 0))
-            cell = (qid, sample_index)
-            if cell in rows:
-                raise ContractError(f"duplicate answer for {cell} in {path}")
-            rows[cell] = row
-    return rows
-
-
-def answer_text(record: dict[str, Any]) -> str:
-    turns = record["choices"][0]["turns"]
-    if not turns or not str(turns[-1]).strip():
-        raise ContractError("empty final answer")
-    return str(turns[-1])
-
-
-def score_standard(question: dict[str, Any], answer: str) -> float:
-    task = str(question["task"])
-    ground_truth = question.get("ground_truth")
-    if task == "cta":
-        from livebench.process_results.data_analysis.cta.utils import cta_process_results
-
-        return float(cta_process_results(ground_truth, answer))
-    if task == "zebra_puzzle":
-        from livebench.process_results.reasoning.zebra_puzzle.utils import (
-            get_zebra_puzzle_evaluator,
-        )
-
-        evaluator = get_zebra_puzzle_evaluator(str(question["livebench_release_date"]))
-        return float(evaluator(ground_truth, answer))
-    if task == "connections":
-        from livebench.process_results.writing.connections.utils import (
-            get_connections_puzzle_evaluator,
-        )
-
-        evaluator = get_connections_puzzle_evaluator(str(question["livebench_release_date"]))
-        return float(evaluator(ground_truth, answer))
-    if task == "olympiad":
-        from livebench.process_results.math.olympiad.utils import (
-            proof_rearrangement_process_results,
-        )
-
-        return float(
-            proof_rearrangement_process_results(
-                ground_truth, answer, edit_distance=True, debug=False
-            )
-        )
-    if task == "math_comp":
-        from livebench.process_results.math.math_competitions.utils import (
-            aime_process_results,
-            mathcontest_process_results,
-        )
-
-        subtask = str(question.get("subtask") or "")
-        return (
-            float(aime_process_results(ground_truth, answer, debug=False))
-            if subtask.startswith("aime")
-            else float(
-                mathcontest_process_results(
-                    ground_truth, answer, str(question["turns"][0]), debug=False
-                )
-            )
-        )
-    if task == "spatial":
-        from livebench.process_results.reasoning.spatial.utils import spatial_process_results
-
-        return float(spatial_process_results(ground_truth, answer, debug=False))
-    if task == "tablejoin":
-        from livebench.process_results.data_analysis.tablejoin.utils import joinmap_process_results
-
-        return float(
-            joinmap_process_results(str(question["turns"][0]), ground_truth, answer, debug=False)
-        )
-    if task == "tablereformat":
-        from livebench.process_results.data_analysis.tablereformat.utils import (
-            table_process_results,
-        )
-
-        version = "v2" if str(question["livebench_release_date"]) >= "2025-04-25" else "v1"
-        return float(
-            table_process_results(
-                str(question["turns"][0]), ground_truth, answer, version, debug=False
-            )
-        )
-    raise ContractError(f"unsupported objective scoring task: {task}")
-
-
-def score_instruction_following(
-    question: dict[str, Any], record: dict[str, Any], arm: str, output_dir: Path
-) -> float:
-    import nltk
-    from livebench.if_runner.instruction_following_eval import evaluation_main
-
-    nltk_cache = Path.home() / ".cache" / "nltk_data"
-    if str(nltk_cache) not in nltk.data.path:
-        nltk.data.path.insert(0, str(nltk_cache))
-    for resource in ("tokenizers/punkt", "tokenizers/punkt_tab/english"):
-        try:
-            nltk.data.find(resource)
-        except LookupError as exc:
-            raise ContractError(
-                f"missing NLTK scoring data; install punkt and punkt_tab in {nltk_cache}"
-            ) from exc
-    output_dir.mkdir(parents=True, exist_ok=True)
-    model_answers = {arm: {str(question["question_id"]): record}}
-    result = evaluation_main.evaluator([question], model_answers, str(output_dir), arm)["strict"]
-    if len(result) != 1:
-        raise ContractError("instruction-following evaluator returned incomplete results")
-    item = result[0]
-    per_instruction = [1 if value else 0 for value in item.follow_instruction_list]
-    if not per_instruction:
-        raise ContractError("instruction-following evaluator returned no instruction statuses")
-    return (
-        (1 if item.follow_all_instructions else 0) + sum(per_instruction) / len(per_instruction)
-    ) / 2
-
-
-def score_run(run_dir: Path) -> dict[str, Any]:
-    questions = json.loads((run_dir / "questions.json").read_text(encoding="utf-8"))
-    by_id = {str(q["question_id"]): q for q in questions}
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    expected = {(str(p["question_id"]), int(p["sample_index"])) for p in manifest["pairs"]}
-    amendment_path = run_dir / "run-amendment.json"
-    excluded: set[tuple[str, int]] = set()
-    if amendment_path.is_file():
-        amendment = json.loads(amendment_path.read_text(encoding="utf-8"))
-        cells = amendment.get("excluded_cells") or []
-        if amendment.get("status") != "VALID_WITH_ONE_INFRA_EXCLUSION" or len(cells) != 1:
-            raise ContractError("unsupported run amendment")
-        excluded = {(str(cells[0]["question_id"]), int(cells[0]["sample_index"]))}
-        if not excluded.issubset(expected):
-            raise ContractError("excluded cell is outside frozen matrix")
-    effective = expected - excluded
-    arm_names = manifest_arm_order(manifest)
-    if any("hermes" in arm for arm in manifest["arms"].values()):
-        return score_multiarm_run(run_dir, by_id, manifest, expected, arm_names, excluded)
-    records = {
-        arm: _load_answers(run_dir / "raw" / f"hermes-{arm}.jsonl") for arm in ("base", "moa")
+def score_run(run: FrozenRun, adapters: Mapping[str, ScoreAdapter]) -> ScoringResult:
+    common, valid = reconcile_scoring_evidence(run)
+    rows: list[ScoreRow] = []
+    by_arm: dict[str, list[float]] = defaultdict(list)
+    for pair in common:
+        first = valid[(run.arm_order[0], pair)]
+        question = run.questions.get(first.cell.question_id)
+        if question is None:
+            raise IntegrityError(f"missing question: {first.cell.question_id}")
+        adapter = adapters.get(question.task)
+        if adapter is None:
+            raise IntegrityError(f"no scoring adapter for task: {question.task}")
+        for arm in run.arm_order:
+            outcome = valid[(arm, pair)]
+            answer = _answer_text(outcome.answer_record)
+            score = float(adapter(question.raw, answer))
+            rows.append(ScoreRow(pair, outcome.cell.question_id, arm, score))
+            by_arm[arm].append(score)
+    means = {arm: sum(by_arm[arm]) / len(by_arm[arm]) for arm in run.arm_order}
+    comparisons = {
+        arm: means[arm] - means[run.baseline_arm]
+        for arm in run.arm_order
+        if arm != run.baseline_arm
     }
-    for arm, rows in records.items():
-        if set(rows) != effective:
-            raise ContractError(
-                f"{arm} answer coverage mismatch: expected {len(effective)}, got {len(rows)}"
-            )
+    exclusions = Counter(
+        outcome.code.value for outcome in run.outcomes if isinstance(outcome, ExcludedOutcome)
+    )
+    audits = _revalidate_trace_audits(run.outcomes)
+    trace_audit = {
+        "valid_traces": len(audits),
+        "reference_calls": sum(int(item.get("reference_calls", 0)) for item in audits),
+        "reference_input_tokens": sum(
+            int(item.get("reference_input_tokens", 0)) for item in audits
+        ),
+        "reference_output_tokens": sum(
+            int(item.get("reference_output_tokens", 0)) for item in audits
+        ),
+        "invalid_traces": exclusions.get("INVALID_MOA_TRACE", 0),
+    }
+    return ScoringResult(
+        run.arm_order,
+        run.baseline_arm,
+        len(run.planned_pairs),
+        common,
+        tuple(rows),
+        MappingProxyType(means),
+        MappingProxyType(comparisons),
+        MappingProxyType(dict(sorted(exclusions.items()))),
+        MappingProxyType(trace_audit),
+    )
 
-    scores: list[dict[str, Any]] = []
-    deltas: list[dict[str, Any]] = []
-    by_category: dict[str, list[float]] = defaultdict(list)
-    by_task: dict[str, list[float]] = defaultdict(list)
-    for qid, sample_index in sorted(effective):
-        question = by_id[qid]
-        pair_scores: dict[str, float] = {}
-        for arm in ("base", "moa"):
-            record = records[arm][(qid, sample_index)]
-            if question["category"] == "instruction_following":
-                score = score_instruction_following(
-                    question,
-                    record,
-                    f"{arm}-{sample_index}",
-                    run_dir / "if-evaluator" / arm / str(sample_index),
+
+def _revalidate_trace_audits(outcomes: tuple[CellOutcome, ...]) -> list[Mapping[str, object]]:
+    audits: list[Mapping[str, object]] = []
+    for outcome in outcomes:
+        if not isinstance(outcome, ValidOutcome):
+            continue
+        for audit in outcome.answer_record.get("trace_audit", []):  # type: ignore[union-attr]
+            if not isinstance(audit, Mapping):
+                raise IntegrityError("invalid persisted trace audit")
+            expected = audit.get("expected")
+            if not isinstance(expected, Mapping):
+                raise IntegrityError("persisted trace expectation is missing")
+            try:
+                expectation = ExpectedTrace(
+                    outcome.cell,
+                    str(expected["preset"]),
+                    tuple((str(item[0]), str(item[1])) for item in expected["references"]),
+                    (str(expected["aggregator"][0]), str(expected["aggregator"][1])),
                 )
-            else:
-                score = score_standard(question, answer_text(record))
-            pair_scores[arm] = score
-            scores.append(
+                validation = validate_cell_trace(
+                    str(audit["trace"]).encode(), expectation, str(audit["answer"])
+                )
+            except (KeyError, IndexError, TypeError) as exc:
+                raise IntegrityError("invalid persisted trace evidence") from exc
+            if validation.exclusion is not None or validation.usage is None:
+                reason = (
+                    validation.exclusion.reason if validation.exclusion else "unknown trace error"
+                )
+                raise IntegrityError(f"persisted trace failed revalidation: {reason}")
+            usage = validation.usage
+            audits.append(
                 {
-                    "question_id": qid,
-                    "sample_index": sample_index,
-                    "category": question["category"],
-                    "task": question["task"],
-                    "arm": arm,
-                    "score": score,
+                    "reference_calls": usage.reference_calls,
+                    "reference_input_tokens": usage.reference_input_tokens,
+                    "reference_output_tokens": usage.reference_output_tokens,
                 }
             )
-        delta = pair_scores["moa"] - pair_scores["base"]
-        deltas.append(
-            {
-                "question_id": qid,
-                "sample_index": sample_index,
-                "category": question["category"],
-                "task": question["task"],
-                "base": pair_scores["base"],
-                "moa": pair_scores["moa"],
-                "delta": delta,
-            }
-        )
-        by_category[str(question["category"])].append(delta)
-        by_task[qid].append(delta)
+    return audits
 
-    base_scores = [d["base"] for d in deltas]
-    moa_scores = [d["moa"] for d in deltas]
-    task_means = {qid: sum(vals) / len(vals) for qid, vals in sorted(by_task.items())}
+
+def _answer_text(record: Mapping[str, object]) -> str:
+    if isinstance(record.get("answer"), str) and str(record["answer"]).strip():
+        return str(record["answer"])
+    try:
+        turns = record["choices"][0]["turns"]  # type: ignore[index]
+        answer = str(turns[-1])
+        if answer.strip():
+            return answer
+    except (KeyError, IndexError, TypeError):
+        pass
+    raise IntegrityError("invalid answer record")
+
+
+def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
     summary = {
-        "status": summary_status(manifest, bool(excluded)),
-        "hermes_compatibility": summary_compatibility(manifest),
-        "planned_pairs": len(expected),
-        "excluded_pairs": len(excluded),
-        "scored_pairs": len(effective),
-        "tasks": len(by_task),
-        "samples_by_task": {qid: len(vals) for qid, vals in sorted(by_task.items())},
-        "base_mean": sum(base_scores) / len(base_scores),
-        "moa_mean": sum(moa_scores) / len(moa_scores),
-        "sample_mean_delta": sum(d["delta"] for d in deltas) / len(deltas),
-        "task_mean_delta": sum(task_means.values()) / len(task_means),
-        "sample_wins_ties_regressions": {
-            "wins": sum(d["delta"] > 0 for d in deltas),
-            "ties": sum(d["delta"] == 0 for d in deltas),
-            "regressions": sum(d["delta"] < 0 for d in deltas),
-        },
-        "task_wins_ties_regressions": {
-            "wins": sum(v > 0 for v in task_means.values()),
-            "ties": sum(v == 0 for v in task_means.values()),
-            "regressions": sum(v < 0 for v in task_means.values()),
-        },
-        "category_mean_delta": {
-            category: sum(values) / len(values) for category, values in sorted(by_category.items())
-        },
-        "task_mean_deltas": task_means,
-        "scores_sha256": sha256_bytes(canonical_json(scores)),
+        "schema_version": 2,
+        "baseline_arm": result.baseline_arm,
+        "arm_order": list(result.arm_order),
+        "planned_pairs": result.planned_pairs,
+        "common_valid_pairs": len(result.common_pairs),
+        "paired_coverage_fraction": len(result.common_pairs) / result.planned_pairs,
+        "arm_means": dict(result.arm_means),
+        "comparisons_vs_baseline": dict(result.comparisons),
+        "exclusion_counts": dict(result.exclusion_counts),
+        "trace_audit": dict(result.trace_audit),
     }
-    (run_dir / "scores.json").write_bytes(canonical_json(scores) + b"\n")
-    (run_dir / "paired-deltas.json").write_bytes(canonical_json(deltas) + b"\n")
-    (run_dir / "summary.json").write_bytes(canonical_json(summary) + b"\n")
-    return summary
-
-
-def score_multiarm_run(
-    run_dir: Path,
-    by_id: dict[str, dict[str, Any]],
-    manifest: dict[str, Any],
-    expected: set[tuple[str, int]],
-    arm_names: list[str],
-    legacy_pair_exclusions: set[tuple[str, int]],
-) -> dict[str, Any]:
-    baseline = str(manifest["execution_contract"]["baseline_arm"])
-    if baseline not in arm_names:
-        raise ContractError(f"baseline arm is not configured: {baseline}")
-    pair_ids = {
-        (str(pair["question_id"]), int(pair["sample_index"])): str(pair["pair_id"])
-        for pair in manifest["pairs"]
-    }
-    records = {arm: _load_answers(run_dir / "raw" / f"hermes-{arm}.jsonl") for arm in arm_names}
-    explicit: dict[tuple[str, tuple[str, int]], dict[str, Any]] = {}
-    for identity in legacy_pair_exclusions:
-        for arm in arm_names:
-            explicit[(arm, identity)] = {
-                "arm": arm,
-                "pair_id": pair_ids[identity],
-                "question_id": identity[0],
-                "sample_index": identity[1],
-                "code": "LEGACY_PAIR_EXCLUSION",
-                "reason": "authorized pair-wide exclusion from run-amendment.json",
-            }
-    exclusions_path = run_dir / "exclusions.json"
-    if exclusions_path.is_file():
-        payload = json.loads(exclusions_path.read_text(encoding="utf-8"))
-        if payload.get("schema_version") != 1:
-            raise ContractError("unsupported exclusions schema")
-        for item in payload.get("excluded_cells") or []:
-            arm = str(item.get("arm"))
-            identity = (str(item.get("question_id")), int(item.get("sample_index")))
-            if arm not in arm_names or identity not in expected:
-                raise ContractError("excluded cell is outside frozen matrix")
-            if str(item.get("pair_id")) != pair_ids[identity]:
-                raise ContractError("excluded cell pair_id does not match frozen matrix")
-            if not str(item.get("code") or "") or not str(item.get("reason") or ""):
-                raise ContractError("excluded cell is missing code or reason")
-            key = (arm, identity)
-            if key in explicit:
-                raise ContractError("duplicate excluded cell")
-            explicit[key] = dict(item)
-
-    unexplained: list[str] = []
-    for arm, rows in records.items():
-        extra = set(rows) - expected
-        if extra:
-            raise ContractError(f"{arm} has answers outside frozen matrix")
-        for identity in expected - set(rows):
-            if (arm, identity) not in explicit:
-                unexplained.append(f"{arm}:{identity[0]}:{identity[1]}")
-    if unexplained:
-        raise ContractError(f"unexplained missing cells: {', '.join(sorted(unexplained))}")
-
-    exclusions = dict(explicit)
-    for arm_name, arm in manifest["arms"].items():
-        hermes_config = arm.get("hermes") if isinstance(arm, dict) else None
-        moa_config = hermes_config.get("moa", {}) if isinstance(hermes_config, dict) else {}
-        if moa_config.get("enabled") is not True:
-            continue
-        trace_dir = run_dir / "homes" / str(arm_name) / "moa-traces"
-        for identity, record in records[str(arm_name)].items():
-            pair_id = pair_ids[identity]
-            paths = sorted(trace_dir.glob(f"{pair_id}-*.jsonl")) if trace_dir.is_dir() else []
-            if len(paths) != 1:
-                exclusions[(str(arm_name), identity)] = {
-                    "arm": str(arm_name),
-                    "pair_id": pair_id,
-                    "question_id": identity[0],
-                    "sample_index": identity[1],
-                    "code": "INVALID_MOA_TRACE",
-                    "reason": f"expected one trace, got {len(paths)}",
-                }
-                continue
-            try:
-                trace_records = [
-                    json.loads(line)
-                    for line in paths[0].read_text(encoding="utf-8").splitlines()
-                    if line.strip()
-                ]
-            except json.JSONDecodeError as error:
-                exclusions[(str(arm_name), identity)] = {
-                    "arm": str(arm_name),
-                    "pair_id": pair_id,
-                    "question_id": identity[0],
-                    "sample_index": identity[1],
-                    "code": "INVALID_MOA_TRACE",
-                    "reason": f"malformed trace JSON: {error.msg}",
-                }
-                continue
-            if len(trace_records) != 1:
-                exclusions[(str(arm_name), identity)] = {
-                    "arm": str(arm_name),
-                    "pair_id": pair_id,
-                    "question_id": identity[0],
-                    "sample_index": identity[1],
-                    "code": "INVALID_MOA_TRACE",
-                    "reason": f"expected one trace record, got {len(trace_records)}",
-                }
-                continue
-            try:
-                validate_moa_trace_record(trace_records[0], answer_text(record), hermes_config)
-            except ContractError as error:
-                exclusions[(str(arm_name), identity)] = {
-                    "arm": str(arm_name),
-                    "pair_id": pair_id,
-                    "question_id": identity[0],
-                    "sample_index": identity[1],
-                    "code": "INVALID_MOA_TRACE",
-                    "reason": str(error),
-                }
-
-    valid_by_arm = {
-        arm: set(records[arm])
-        - {identity for excluded_arm, identity in exclusions if excluded_arm == arm}
-        for arm in arm_names
-    }
-    common_valid = set.intersection(*(valid_by_arm[arm] for arm in arm_names))
-    if not common_valid:
-        raise ContractError("no common valid pairs remain after exclusions")
-
-    scores: list[dict[str, Any]] = []
-    cells: list[dict[str, Any]] = []
-    values_by_arm: dict[str, list[float]] = {arm: [] for arm in arm_names}
-    task_values: dict[str, dict[str, list[float]]] = {arm: defaultdict(list) for arm in arm_names}
-    category_values: dict[str, dict[str, list[float]]] = {
-        arm: defaultdict(list) for arm in arm_names
-    }
-    for qid, sample_index in sorted(common_valid):
-        question = by_id[qid]
-        cell_scores: dict[str, float] = {}
-        for arm in arm_names:
-            record = records[arm][(qid, sample_index)]
-            if question["category"] == "instruction_following":
-                score = score_instruction_following(
-                    question,
-                    record,
-                    f"{arm}-{sample_index}",
-                    run_dir / "if-evaluator" / arm / str(sample_index),
-                )
-            else:
-                score = score_standard(question, answer_text(record))
-            cell_scores[arm] = score
-            values_by_arm[arm].append(score)
-            task_values[arm][qid].append(score)
-            category_values[arm][str(question["category"])].append(score)
-            scores.append(
-                {
-                    "question_id": qid,
-                    "sample_index": sample_index,
-                    "category": question["category"],
-                    "task": question["task"],
-                    "arm": arm,
-                    "score": score,
-                }
-            )
-        cells.append(
-            {
-                "question_id": qid,
-                "sample_index": sample_index,
-                "scores": cell_scores,
-                "deltas_vs_baseline": {
-                    arm: cell_scores[arm] - cell_scores[baseline]
-                    for arm in arm_names
-                    if arm != baseline
-                },
-            }
-        )
-
-    arm_means = {arm: sum(values) / len(values) for arm, values in values_by_arm.items()}
-    comparisons = {}
-    for arm in arm_names:
-        if arm == baseline:
-            continue
-        sample_deltas = [cell["deltas_vs_baseline"][arm] for cell in cells]
-        per_task_deltas = []
-        for qid in sorted(task_values[baseline]):
-            base_mean = sum(task_values[baseline][qid]) / len(task_values[baseline][qid])
-            arm_mean = sum(task_values[arm][qid]) / len(task_values[arm][qid])
-            per_task_deltas.append(arm_mean - base_mean)
-        comparisons[arm] = {
-            "absolute_delta": arm_means[arm] - arm_means[baseline],
-            "relative_delta_percent": (
-                None
-                if arm_means[baseline] == 0
-                else (arm_means[arm] - arm_means[baseline]) / arm_means[baseline] * 100
-            ),
-            "task_mean_delta": sum(per_task_deltas) / len(per_task_deltas),
-            "wins": sum(value > 0 for value in sample_deltas),
-            "ties": sum(value == 0 for value in sample_deltas),
-            "regressions": sum(value < 0 for value in sample_deltas),
+    scores = [
+        {"pair_id": row.pair_id, "question_id": row.question_id, "arm": row.arm, "score": row.score}
+        for row in result.rows
+    ]
+    encode = lambda value: (
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        + b"\n"
+    )
+    return ScoringBundle(
+        {
+            Path("summary.json"): encode(summary),
+            Path("scores.json"): encode(scores),
+            Path("report.md"): report.encode(),
         }
-    exclusion_list = sorted(
-        exclusions.values(),
-        key=lambda item: (item["arm"], item["question_id"], item["sample_index"]),
     )
-    warning = manifest.get("hermes_compatibility", {}).get("status") != "verified"
-    if exclusion_list:
-        status = "VALID_WITH_EXCLUSIONS_AND_HERMES_WARNING" if warning else "VALID_WITH_EXCLUSIONS"
-    else:
-        status = "VALID_WITH_HERMES_WARNING" if warning else "VALID"
-    summary = {
-        "status": status,
-        "hermes_compatibility": summary_compatibility(manifest),
-        "baseline_arm": baseline,
-        "arms": arm_names,
-        "planned_pairs": len(expected),
-        "common_valid_pairs": len(common_valid),
-        "paired_coverage_fraction": len(common_valid) / len(expected),
-        "planned_cells": len(expected) * len(arm_names),
-        "valid_cells": sum(len(values) for values in valid_by_arm.values()),
-        "excluded_cells": len(exclusion_list),
-        "arm_coverage": {
-            arm: {
-                "planned_cells": len(expected),
-                "valid_cells": len(valid_by_arm[arm]),
-                "excluded_cells": len(expected) - len(valid_by_arm[arm]),
-            }
-            for arm in arm_names
-        },
-        "exclusions": exclusion_list,
-        "arm_means": arm_means,
-        "comparisons_vs_baseline": comparisons,
-        "category_means": {
-            arm: {
-                category: sum(values) / len(values)
-                for category, values in sorted(categories.items())
-            }
-            for arm, categories in category_values.items()
-        },
-        "timing": timing_summary(manifest, records),
-        "reference_phase_timing": {
-            "status": "unavailable",
-            "reason": (
-                "Hermes 0.19.1 MoA traces do not persist reference phase timestamps or duration"
-            ),
-        },
-        "scores_sha256": sha256_bytes(canonical_json(scores)),
-    }
-    (run_dir / "scores.json").write_bytes(canonical_json(scores) + b"\n")
-    (run_dir / "paired-deltas.json").write_bytes(canonical_json(cells) + b"\n")
-    (run_dir / "summary.json").write_bytes(canonical_json(summary) + b"\n")
-    (run_dir / "report.md").write_text(render_markdown_report(summary, manifest), encoding="utf-8")
-    return summary

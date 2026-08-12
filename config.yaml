@@ -51,12 +51,12 @@ selection:
 generation:
   samples_per_task: 5
   retry:
-    max_attempts: 1
-    retry_only: none
-  timeout_seconds: 1800
+    max_attempts: 2
+    retryable_codes: []
 execution:
-  scheduling: streaming
+  mode: streaming
   workers: auto
+  timeout_seconds: 1800
   baseline_arm: base
 compatibility:
   # Verified reference profile. Another installed version is allowed with a
@@ -171,3 +171,4 @@ arms:
               reasoning_effort: low
 scoring:
   implementation: livebench-objective-ground-truth
+  schema_version: 2
