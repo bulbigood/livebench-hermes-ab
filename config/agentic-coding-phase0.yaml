@@ -29,6 +29,7 @@ tasks:
       empty: cd /testbed && git apply /evidence/test.patch && /opt/miniconda3/envs/testbed/bin/pytest -q test_requests.py::RequestsTestCase::test_no_content_length
       gold: cd /testbed && git apply /evidence/test.patch /evidence/fix.patch && /opt/miniconda3/envs/testbed/bin/pytest -q test_requests.py::RequestsTestCase::test_no_content_length
       wrong: cd /testbed && git apply /evidence/test.patch && printf '\n# deliberately wrong patch\n' >> requests/models.py && /opt/miniconda3/envs/testbed/bin/pytest -q test_requests.py::RequestsTestCase::test_no_content_length
+      candidate: cd /testbed && git apply /evidence/candidate.patch /evidence/test.patch && /opt/miniconda3/envs/testbed/bin/pytest -q test_requests.py::RequestsTestCase::test_no_content_length
   - instance_id: google__gson-1093
     language: java
     repository: google/gson
@@ -41,9 +42,10 @@ tasks:
     model_paths: [gson/src/main/java/com/google/gson/stream/JsonWriter.java]
     hidden_test_paths: [gson/src/test/java/com/google/gson/stream/JsonWriterTest.java]
     commands:
-      empty: cd /home/gson && git apply --whitespace=nowarn /home/test.patch && mvn -pl gson -Dtest=com.google.gson.stream.JsonWriterTest test
-      gold: cd /home/gson && git apply --whitespace=nowarn /home/test.patch /home/fix.patch && mvn -pl gson -Dtest=com.google.gson.stream.JsonWriterTest test
-      wrong: cd /home/gson && git apply --whitespace=nowarn /home/test.patch && printf '\n// deliberately wrong patch\n' >> gson/src/main/java/com/google/gson/stream/JsonWriter.java && mvn -pl gson -Dtest=com.google.gson.stream.JsonWriterTest test
+      empty: cd /home/gson && git apply --whitespace=nowarn /evidence/test.patch && mvn -pl gson -Dtest=com.google.gson.stream.JsonWriterTest test
+      gold: cd /home/gson && git apply --whitespace=nowarn /evidence/test.patch /evidence/fix.patch && mvn -pl gson -Dtest=com.google.gson.stream.JsonWriterTest test
+      wrong: cd /home/gson && git apply --whitespace=nowarn /evidence/test.patch && printf '\n// deliberately wrong patch\n' >> gson/src/main/java/com/google/gson/stream/JsonWriter.java && mvn -pl gson -Dtest=com.google.gson.stream.JsonWriterTest test
+      candidate: cd /home/gson && git apply --whitespace=nowarn /evidence/candidate.patch /evidence/test.patch && mvn -pl gson -Dtest=com.google.gson.stream.JsonWriterTest test
   - instance_id: tokio-rs__bytes-732
     language: rust
     repository: tokio-rs/bytes
@@ -56,6 +58,7 @@ tasks:
     model_paths: [src/buf/buf_impl.rs]
     hidden_test_paths: [tests/test_buf.rs]
     commands:
-      empty: cd /home/bytes && git apply /home/test.patch && cargo test --test test_buf test_get_int
-      gold: cd /home/bytes && git apply /home/test.patch /home/fix.patch && cargo test --test test_buf test_get_int
-      wrong: cd /home/bytes && git apply /home/test.patch && printf '\n// deliberately wrong patch\n' >> src/buf/buf_impl.rs && cargo test --test test_buf test_get_int
+      empty: cd /home/bytes && git apply /evidence/test.patch && cargo test --test test_buf test_get_int
+      gold: cd /home/bytes && git apply /evidence/test.patch /evidence/fix.patch && cargo test --test test_buf test_get_int
+      wrong: cd /home/bytes && git apply /evidence/test.patch && printf '\n// deliberately wrong patch\n' >> src/buf/buf_impl.rs && cargo test --test test_buf test_get_int
+      candidate: cd /home/bytes && git apply /evidence/candidate.patch /evidence/test.patch && cargo test --test test_buf test_get_int

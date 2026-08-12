@@ -58,6 +58,17 @@ def test_request_round_trip_and_hidden_paths_are_not_model_paths(tmp_path: Path)
     )
     assert request.mode == "gold"
     assert request.task_id == "psf__requests-1142"
+    candidate = SidecarRequest.from_json(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "task_id": "psf__requests-1142",
+                "mode": "candidate",
+                "evidence_dir": str(tmp_path),
+            }
+        )
+    )
+    assert candidate.mode == "candidate"
     task = load_agentic_cohort(COHORT).by_id[request.task_id]
     assert set(task.model_paths).isdisjoint(task.hidden_test_paths)
 

@@ -29,7 +29,7 @@ The current source relationship is `public_authoritative_origin_livebench_member
 }
 ```
 
-`mode` is one of `empty`, `gold`, or `wrong`. Commands cannot be supplied by the request. The sidecar executes only commands frozen in the cohort.
+`mode` is one of `empty`, `gold`, `wrong`, or `candidate`. Commands cannot be supplied by the request. The sidecar executes only commands frozen in the cohort. Candidate mode requires a filtered `candidate.patch`; pinned hidden test evidence remains private.
 
 ## Result
 

@@ -17,7 +17,7 @@ import yaml
 
 from .domain import ConfigError
 
-Mode = Literal["empty", "gold", "wrong"]
+Mode = Literal["empty", "gold", "wrong", "candidate"]
 
 
 class AgenticStatus(str, Enum):
@@ -104,7 +104,12 @@ class SidecarRequest:
         except json.JSONDecodeError as exc:
             raise ConfigError("invalid sidecar request JSON") from exc
         _keys(raw, {"schema_version", "task_id", "mode", "evidence_dir"}, "request")
-        if raw["schema_version"] != 1 or raw["mode"] not in {"empty", "gold", "wrong"}:
+        if raw["schema_version"] != 1 or raw["mode"] not in {
+            "empty",
+            "gold",
+            "wrong",
+            "candidate",
+        }:
             raise ConfigError("unsupported sidecar request")
         return cls(1, str(raw["task_id"]), raw["mode"], Path(raw["evidence_dir"]))
 
@@ -193,7 +198,11 @@ def load_agentic_cohort(path: Path) -> AgenticCohort:
     tasks = []
     for index, task in enumerate(raw["tasks"]):
         _keys(task, task_keys, f"tasks[{index}]")
-        _keys(task["commands"], {"empty", "gold", "wrong"}, f"tasks[{index}].commands")
+        _keys(
+            task["commands"],
+            {"empty", "gold", "wrong", "candidate"},
+            f"tasks[{index}].commands",
+        )
         if set(task["model_paths"]) & set(task["hidden_test_paths"]):
             raise ConfigError(f"tasks[{index}] model and hidden-test paths overlap")
         tasks.append(
@@ -296,8 +305,7 @@ class PodmanBackend:
             "--memory",
             cohort.runtime.memory,
         ]
-        if task.language == "python":
-            command += ["-v", f"{request.evidence_dir.resolve()}:/evidence:ro,Z"]
+        command += ["-v", f"{request.evidence_dir.resolve()}:/evidence:ro,Z"]
         command += [task.image, "/bin/bash", "-c", task.commands[request.mode]]
         return self._run(
             command,
@@ -343,6 +351,8 @@ def _validate_evidence(
     required = [request.evidence_dir / "test.patch"]
     if request.mode == "gold":
         required.append(request.evidence_dir / "fix.patch")
+    if request.mode == "candidate":
+        required.append(request.evidence_dir / "candidate.patch")
     if any(not path.is_file() for path in required):
         return None, _result(
             request.task_id,
@@ -351,15 +361,20 @@ def _validate_evidence(
             AgenticReasonCode.MISSING_PATCH,
         )
     expected = {"test.patch": task.test_patch_sha256, "fix.patch": task.fix_patch_sha256}
-    if any(_sha256(path) != expected[path.name] for path in required):
+    if any(path.name in expected and _sha256(path) != expected[path.name] for path in required):
         return None, _result(
             request.task_id,
             request.mode,
             AgenticStatus.INVALID_PATCH,
             AgenticReasonCode.PATCH_DIGEST_MISMATCH,
         )
-    patch = request.evidence_dir / ("fix.patch" if request.mode == "gold" else "test.patch")
-    return _sha256(patch), None
+    patch_name = {
+        "gold": "fix.patch",
+        "candidate": "candidate.patch",
+        "empty": "test.patch",
+        "wrong": "test.patch",
+    }[request.mode]
+    return _sha256(request.evidence_dir / patch_name), None
 
 
 def _classify_completed(
@@ -367,9 +382,9 @@ def _classify_completed(
 ) -> SidecarResult:
     passed = completed.returncode == 0
     status = AgenticStatus.RESOLVED if passed else AgenticStatus.UNRESOLVED
-    reason = (
-        None if passed == (request.mode == "gold") else AgenticReasonCode.UNEXPECTED_TEST_RESULT
-    )
+    reason = None
+    if request.mode != "candidate" and passed != (request.mode == "gold"):
+        reason = AgenticReasonCode.UNEXPECTED_TEST_RESULT
     return _result(
         request.task_id,
         request.mode,

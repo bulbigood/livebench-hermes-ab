@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from .agentic import AgenticStatus, SidecarRequest, load_agentic_cohort, run_sidecar
+from .agentic_vertical import run_no_provider_vertical
 from .domain import HarnessError
 
 
@@ -64,6 +65,15 @@ def command_phase0(args: argparse.Namespace) -> int:
     return 0 if complete else 2
 
 
+def command_vertical(args: argparse.Namespace) -> int:
+    cohort = load_agentic_cohort(args.cohort)
+    payload = run_no_provider_vertical(cohort, args.evidence_root, args.output_root)
+    output = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    _atomic_write(args.output, output)
+    sys.stdout.write(output)
+    return 0 if payload["status"] == "complete" else 2
+
+
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description="Typed no-provider Agentic Coding sidecar")
     value.add_argument("--cohort", type=Path, required=True)
@@ -74,13 +84,22 @@ def parser() -> argparse.ArgumentParser:
     phase0 = commands.add_parser("phase0")
     phase0.add_argument("--evidence-root", type=Path, required=True)
     phase0.add_argument("--output", type=Path, required=True)
+    vertical = commands.add_parser("vertical")
+    vertical.add_argument("--evidence-root", type=Path, required=True)
+    vertical.add_argument("--output-root", type=Path, required=True)
+    vertical.add_argument("--output", type=Path, required=True)
     return value
 
 
 def main() -> None:
     args = parser().parse_args()
     try:
-        code = command_run(args) if args.command == "run" else command_phase0(args)
+        handlers = {
+            "run": command_run,
+            "phase0": command_phase0,
+            "vertical": command_vertical,
+        }
+        code = handlers[args.command](args)
     except (HarnessError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
