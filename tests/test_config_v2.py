@@ -18,6 +18,23 @@ def test_default_config_is_strict_typed_and_ordered() -> None:
     assert config.execution.mode == "streaming"
     assert config.scoring.schema_version == 2
     assert config.generation.retry.retryable_codes == frozenset()
+    assert config.experiment_id == "livebench-hermes-targeted-moa-15x5-v7"
+    reasoning_ids = {item["id"] for item in config.selection.scenarios["reasoning"]}
+    assert {
+        "20d48b97e524cd64f82b0e4fb3c597a37bae1d9357e9b2c93aad96b4c70e098e",
+        "b1b1678a4f290c8ab2b85f957a0cdbba93ef0c97d1e7ab4663e46e92ebac70e8",
+    } <= reasoning_ids
+    assert (
+        not {
+            "6bd178380f1808eadda3b1565ac385a0ed891cb438a611a8142e9002ac35bbe4",
+            "c29eb6b3c9fd3f67fba90afc62b89640ba6b6aa5f74bb2efd8d5650af6b78ff6",
+        }
+        & reasoning_ids
+    )
+    for arm in config.arms:
+        preset = arm.hermes["moa"].get("presets", {}).get("default")
+        if preset is not None:
+            assert preset["reference_max_tokens"] == 50_000
 
 
 def test_unknown_and_legacy_config_fail_closed() -> None:
