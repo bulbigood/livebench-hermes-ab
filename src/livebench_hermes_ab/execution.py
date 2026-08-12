@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 from .artifacts import ArtifactStore, ExecutionBundle
 from .domain import (
+    AttemptDiagnostic,
     CellOutcome,
     CellSpec,
     ExcludedOutcome,
@@ -22,6 +24,19 @@ class Workspace(Protocol):
     def cleanup(self) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class CellRunResult:
+    outcome: CellOutcome
+    diagnostic: AttemptDiagnostic | None = None
+
+
+def _trace_diagnostic(trace: bytes) -> AttemptDiagnostic:
+    try:
+        return AttemptDiagnostic("moa_trace", "utf-8", trace.decode("utf-8"))
+    except UnicodeDecodeError:
+        return AttemptDiagnostic("moa_trace", "base64", base64.b64encode(trace).decode("ascii"))
+
+
 class CellRunner:
     def __init__(
         self,
@@ -35,7 +50,7 @@ class CellRunner:
             timeout_seconds,
         )
 
-    def run(self, cell: CellSpec) -> CellOutcome:
+    def run(self, cell: CellSpec) -> CellRunResult:
         workspace = None
         try:
             workspace = self.workspace_factory(cell)
@@ -64,7 +79,13 @@ class CellRunner:
                 )
                 outcome, usage = self._check_result(cell, workspace, result)
                 if outcome is not None:
-                    return outcome
+                    diagnostic = (
+                        _trace_diagnostic(result.trace_bytes)
+                        if outcome.code is ExclusionCode.INVALID_MOA_TRACE
+                        and result.trace_bytes is not None
+                        else None
+                    )
+                    return CellRunResult(outcome, diagnostic)
                 if usage is not None:
                     trace_audit.append(usage)
                 answers.append(result.stdout.strip())
@@ -77,7 +98,7 @@ class CellRunner:
                 "turns": answers,
                 "trace_audit": trace_audit,
             }
-            return ValidOutcome(cell.id, record, result.elapsed_seconds)
+            return CellRunResult(ValidOutcome(cell.id, record, result.elapsed_seconds))
         finally:
             if workspace is not None:
                 workspace.cleanup()
@@ -158,8 +179,9 @@ class ExecutionService:
             cell.id: attempts[index] if attempts else 1 for index, cell in enumerate(cells)
         }
 
-        def persist(outcome: CellOutcome) -> None:
-            self.store.write_cell_attempt(attempt_by_cell[outcome.cell], outcome)
+        def persist(result: CellRunResult) -> None:
+            outcome = result.outcome
+            self.store.write_cell_attempt(attempt_by_cell[outcome.cell], outcome, result.diagnostic)
             self.store.promote_cell_outcome(outcome)
             terminal.append(outcome)
 

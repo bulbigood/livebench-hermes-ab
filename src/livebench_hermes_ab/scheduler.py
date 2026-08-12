@@ -4,8 +4,11 @@ import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from typing import TypeVar
 
-from .domain import CellOutcome, CellSpec, HarnessExecutionError
+from .domain import CellSpec, HarnessExecutionError
+
+TerminalResult = TypeVar("TerminalResult")
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,15 +35,15 @@ class Scheduler:
     def execute(
         self,
         cells: Sequence[ScheduledCell],
-        run_cell: Callable[[CellSpec], CellOutcome],
-        on_terminal: Callable[[CellOutcome], None],
+        run_cell: Callable[[CellSpec], TerminalResult],
+        on_terminal: Callable[[TerminalResult], None],
     ) -> ScheduleResult:
         if self.mode == "balanced_waves":
             return self._execute_waves(cells, run_cell, on_terminal)
         pending_index = submitted = terminal = 0
         fatal: list[tuple[int, HarnessExecutionError]] = []
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            active: dict[Future[CellOutcome], ScheduledCell] = {}
+            active: dict[Future[TerminalResult], ScheduledCell] = {}
             while pending_index < len(cells) and len(active) < self.workers:
                 scheduled = cells[pending_index]
                 pending_index += 1
@@ -76,8 +79,8 @@ class Scheduler:
     def _execute_waves(
         self,
         cells: Sequence[ScheduledCell],
-        run_cell: Callable[[CellSpec], CellOutcome],
-        on_terminal: Callable[[CellOutcome], None],
+        run_cell: Callable[[CellSpec], TerminalResult],
+        on_terminal: Callable[[TerminalResult], None],
     ) -> ScheduleResult:
         submitted = terminal = 0
         fatal: list[tuple[int, HarnessExecutionError]] = []
@@ -105,7 +108,7 @@ class Scheduler:
 
                 def start_together(
                     item: ScheduledCell, start_barrier: threading.Barrier = barrier
-                ) -> CellOutcome:
+                ) -> TerminalResult:
                     start_barrier.wait()
                     return run_cell(item.cell)
 

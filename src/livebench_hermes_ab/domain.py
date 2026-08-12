@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 
 class HarnessError(Exception):
@@ -79,6 +79,13 @@ class ExcludedOutcome:
 
 
 CellOutcome: TypeAlias = ValidOutcome | ExcludedOutcome
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptDiagnostic:
+    kind: Literal["moa_trace"]
+    encoding: Literal["utf-8", "base64"]
+    content: str
 
 
 @dataclass(frozen=True, slots=True)

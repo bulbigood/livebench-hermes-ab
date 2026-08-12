@@ -65,7 +65,7 @@ def validate_cell_trace(
         if not output.strip() or _hash(output) != _hash(answer):
             raise ValueError("aggregator output does not match answer")
         return TraceValidation(TraceUsage(input_tokens, output_tokens, len(references)), None)
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError, ValueError) as exc:
         return TraceValidation(
             None, ExcludedOutcome(expected.cell, ExclusionCode.INVALID_MOA_TRACE, str(exc), None)
         )

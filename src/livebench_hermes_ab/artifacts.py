@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .domain import (
+    AttemptDiagnostic,
     CellId,
     CellOutcome,
     ExcludedOutcome,
@@ -37,7 +38,9 @@ class ScoringBundle:
 
 
 class ArtifactStore(Protocol):
-    def write_cell_attempt(self, attempt: int, outcome: CellOutcome) -> None: ...
+    def write_cell_attempt(
+        self, attempt: int, outcome: CellOutcome, diagnostic: AttemptDiagnostic | None = None
+    ) -> None: ...
     def promote_cell_outcome(self, outcome: CellOutcome) -> None: ...
     def load_cell_outcomes(self) -> tuple[CellOutcome, ...]: ...
     def publish_execution(self, bundle: ExecutionBundle) -> None: ...
@@ -146,13 +149,29 @@ class FilesystemArtifactStore:
     def write_manifest(self, manifest: RunManifest) -> None:
         self._atomic_file(self.root / "manifest.json", serialize_manifest(manifest))
 
-    def write_cell_attempt(self, attempt: int, outcome: CellOutcome) -> None:
+    def write_cell_attempt(
+        self, attempt: int, outcome: CellOutcome, diagnostic: AttemptDiagnostic | None = None
+    ) -> None:
         if attempt < 1:
             raise PersistenceError("attempt number must be positive")
         path = self.root / "attempts" / f"{self._key(outcome.cell)}-attempt-{attempt}.json"
         if path.exists():
             raise PersistenceError(f"attempt artifact already exists: {path.name}")
-        self._atomic_file(path, serialize_cell_outcome(outcome))
+        value: dict[str, object] = {
+            "attempt_schema_version": 1,
+            "outcome": json.loads(serialize_cell_outcome(outcome)),
+        }
+        if diagnostic is not None:
+            value["diagnostic"] = {
+                "kind": diagnostic.kind,
+                "encoding": diagnostic.encoding,
+                "content": diagnostic.content,
+            }
+        self._atomic_file(
+            path,
+            json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+            + b"\n",
+        )
 
     def promote_cell_outcome(self, outcome: CellOutcome) -> None:
         self._atomic_file(

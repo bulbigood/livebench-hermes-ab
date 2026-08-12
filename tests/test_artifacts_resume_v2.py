@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,12 @@ def test_retry_plan_preserves_authoritative_outcome_until_promotion(tmp_path: Pa
     assert store.load_cell_outcomes() == (old,)
     new = ValidOutcome(cell, {"answer": "new"}, 1.0)
     store.write_cell_attempt(plan.attempts[0], new)
+    attempt = next((tmp_path / "attempts").glob("*.json"))
+    attempt_value = json.loads(attempt.read_text())
+    assert attempt_value == {
+        "attempt_schema_version": 1,
+        "outcome": json.loads(serialize_cell_outcome(new)),
+    }
     with pytest.raises(PersistenceError, match="already exists"):
         store.write_cell_attempt(plan.attempts[0], new)
     assert store.load_cell_outcomes() == (old,)

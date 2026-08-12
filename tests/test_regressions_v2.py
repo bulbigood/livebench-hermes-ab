@@ -36,7 +36,7 @@ def test_cell_workspace_clones_template_sets_home_and_cleans(tmp_path: Path) -> 
     runner = RecordingRunner(["answer"])
     cell = CellSpec(CellId("base", "p", "q", 1), "prompt", "base", 1)
 
-    outcome = CellRunner(runner, CellWorkspaceFactory(tmp_path)).run(cell)
+    outcome = CellRunner(runner, CellWorkspaceFactory(tmp_path)).run(cell).outcome
 
     assert isinstance(outcome, ValidOutcome)
     assert runner.requests[0].home is not None
@@ -56,15 +56,17 @@ def test_multi_turn_execution_builds_conversation_and_rejects_sentinel(tmp_path:
         system_prompt="System",
     )
     runner = RecordingRunner(["one", "two"])
-    outcome = CellRunner(runner, CellWorkspaceFactory(tmp_path)).run(cell)
+    outcome = CellRunner(runner, CellWorkspaceFactory(tmp_path)).run(cell).outcome
     assert isinstance(outcome, ValidOutcome)
     assert outcome.answer_record["turns"] == ["one", "two"]
     assert runner.requests[1].prompt == (
         "System\n\nFirst\n\nAssistant's previous response:\none\n\nSecond"
     )
 
-    invalid = CellRunner(RecordingRunner(["(empty response)"]), CellWorkspaceFactory(tmp_path)).run(
-        CellSpec(CellId("base", "p2", "q2", 1), "p", "base", 1)
+    invalid = (
+        CellRunner(RecordingRunner(["(empty response)"]), CellWorkspaceFactory(tmp_path))
+        .run(CellSpec(CellId("base", "p2", "q2", 1), "p", "base", 1))
+        .outcome
     )
     assert isinstance(invalid, ExcludedOutcome)
     assert invalid.code is ExclusionCode.INVALID_MODEL_OUTPUT
