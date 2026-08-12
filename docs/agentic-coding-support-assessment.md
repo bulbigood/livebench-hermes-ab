@@ -342,4 +342,4 @@ All validation containers were created with `--rm`; final container count was ze
 
 Go for a single-arm no-provider sidecar implementation using the measured three-task cohort. Do not run provider-backed Agentic Coding and do not claim official LiveBench cohort membership until the gated records are available and identity-matched.
 
-The storage question is resolved: the multilingual cohort fits comfortably below 15 GB. Remaining blockers are the typed sidecar contract, exact gated-release identity confirmation, and full upstream F2P/P2P report execution—not local disk capacity.
+The storage question is resolved: the multilingual cohort fits comfortably below 15 GB. A typed no-provider sidecar is now implemented as `livebench-agentic-sidecar`, with its frozen cohort in `config/agentic-coding-phase0.yaml` and schema documentation in `docs/schemas/agentic-sidecar-v1.md`. Its final Phase 0 batch reproduced all nine expected empty/gold/wrong outcomes using the cached images. Remaining blockers are exact gated-release identity confirmation and agent trajectory/patch extraction before any provider-backed run—not local disk capacity or evaluator execution.

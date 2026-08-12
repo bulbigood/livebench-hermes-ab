@@ -29,6 +29,7 @@ livebench = [
 
 [project.scripts]
 livebench-hermes-ab = "livebench_hermes_ab.cli:main"
+livebench-agentic-sidecar = "livebench_hermes_ab.agentic_cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,61 @@
+schema_version: 1
+source:
+  dataset: ByteDance-Seed/Multi-SWE-bench
+  revision: 56ff018c04a38e27ada1e9d0a6d5839a51f88f0d
+  relationship: public_authoritative_origin_livebench_membership_unconfirmed
+storage:
+  hard_limit_bytes: 15000000000
+  minimum_free_bytes: 6000000000
+  measured_retained_bytes: 5459492864
+runtime:
+  executable: podman
+  network: none
+  cpus: 2
+  memory: 4g
+  timeout_seconds: 900
+tasks:
+  - instance_id: psf__requests-1142
+    language: python
+    repository: psf/requests
+    pr_number: 1142
+    base_sha: 22623bd8c265b78b161542663ee980738441c307
+    image: docker.io/swebench/sweb.eval.x86_64.psf_1776_requests-1142:latest
+    image_digest: sha256:9b0b13a4a762e809a60424f8fd9ba40b45f87874de87479a771e4e673f937d59
+    fix_patch_sha256: c25c1f930edaf8514d3a5f2bc5631a8e8080ecb2511c789ec171f37d14e627a6
+    test_patch_sha256: 6671e023a6f6ed84969327ccee025cb8ab81e79c9477a7d635640c0b03836769
+    model_paths: [requests/models.py]
+    hidden_test_paths: [test_requests.py]
+    commands:
+      empty: cd /testbed && git apply /evidence/test.patch && /opt/miniconda3/envs/testbed/bin/pytest -q test_requests.py::RequestsTestCase::test_no_content_length
+      gold: cd /testbed && git apply /evidence/test.patch /evidence/fix.patch && /opt/miniconda3/envs/testbed/bin/pytest -q test_requests.py::RequestsTestCase::test_no_content_length
+      wrong: cd /testbed && git apply /evidence/test.patch && printf '\n# deliberately wrong patch\n' >> requests/models.py && /opt/miniconda3/envs/testbed/bin/pytest -q test_requests.py::RequestsTestCase::test_no_content_length
+  - instance_id: google__gson-1093
+    language: java
+    repository: google/gson
+    pr_number: 1093
+    base_sha: 0aaef0fd1bb1b9729543dc40168adfb829eb75a4
+    image: localhost/mswebench/google_m_gson:pr-1093
+    image_digest: sha256:9b380f37469de8d920045add3b92eb874eca7ff15fbb967ffe8f8ec97c254cf4
+    fix_patch_sha256: 3d1b76c39c54c4ad1a1e70a8ac5e1998cb8d48f3698aa1c72f2fbe0890cb69eb
+    test_patch_sha256: 931d6d2c5b3a4cce4d592571da0d67f2c9f6515877375c581bcd7ab8226b8891
+    model_paths: [gson/src/main/java/com/google/gson/stream/JsonWriter.java]
+    hidden_test_paths: [gson/src/test/java/com/google/gson/stream/JsonWriterTest.java]
+    commands:
+      empty: cd /home/gson && git apply --whitespace=nowarn /home/test.patch && mvn -pl gson -Dtest=com.google.gson.stream.JsonWriterTest test
+      gold: cd /home/gson && git apply --whitespace=nowarn /home/test.patch /home/fix.patch && mvn -pl gson -Dtest=com.google.gson.stream.JsonWriterTest test
+      wrong: cd /home/gson && git apply --whitespace=nowarn /home/test.patch && printf '\n// deliberately wrong patch\n' >> gson/src/main/java/com/google/gson/stream/JsonWriter.java && mvn -pl gson -Dtest=com.google.gson.stream.JsonWriterTest test
+  - instance_id: tokio-rs__bytes-732
+    language: rust
+    repository: tokio-rs/bytes
+    pr_number: 732
+    base_sha: 291df5acc94b82a48765e67eeb1c1a2074539e68
+    image: localhost/mswebench/tokio-rs_m_bytes:pr-732
+    image_digest: sha256:8c5270692be7eebaacee61658c3d7af22a8bde299b841e0a055b85bc4de0179c
+    fix_patch_sha256: 97c177fb1ed99e31d373d088a74752c58f8a8b09c88cd8cd6db69698a18f6d19
+    test_patch_sha256: bd41c416f9b708b921ea7f8381e842c321ab7bd20253fc9e889e3e2562c1c480
+    model_paths: [src/buf/buf_impl.rs]
+    hidden_test_paths: [tests/test_buf.rs]
+    commands:
+      empty: cd /home/bytes && git apply /home/test.patch && cargo test --test test_buf test_get_int
+      gold: cd /home/bytes && git apply /home/test.patch /home/fix.patch && cargo test --test test_buf test_get_int
+      wrong: cd /home/bytes && git apply /home/test.patch && printf '\n// deliberately wrong patch\n' >> src/buf/buf_impl.rs && cargo test --test test_buf test_get_int
