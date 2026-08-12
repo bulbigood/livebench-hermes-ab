@@ -10,6 +10,18 @@ uv run livebench-hermes-ab --config config.yaml prepare --run-dir runs/default
 
 `prepare` performs no model calls. It validates the strict v2 config, pinned upstream revision, selected questions, Hermes version, arm order, and planned call count, then atomically publishes a prepared directory.
 
+Credential values never belong in the experiment YAML. `prepare` resolves only the variable
+names allowlisted by each arm's `credential_env`. It first checks the environment inherited by
+the harness process, then a dotenv credentials file. The portable default is
+`$HERMES_HOME/.env`; an explicit secret source can be selected without recording its path or
+contents in run evidence:
+
+```bash
+uv run livebench-hermes-ab --config config.yaml prepare \
+  --credentials-file "$HOME/.config/livebench-hermes/credentials.env" \
+  --run-dir runs/default
+```
+
 Samples, scheduling mode, and worker count are configured only in `config.yaml` and
 frozen in `config.snapshot.yaml` and `manifest.json`. In `balanced_waves` mode,
 `execution.workers` must be an explicit multiple of the arm count. With four arms,

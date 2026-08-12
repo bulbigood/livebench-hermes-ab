@@ -71,8 +71,13 @@ def configure_arm_homes(
     output_root: Path,
     source_home: Path,
     arms: Iterable[tuple[str, Mapping[str, object], tuple[str, ...]]],
+    *,
+    credentials_file: Path | None = None,
 ) -> None:
-    source_values = _env_file(source_home / ".env")
+    selected_credentials = credentials_file or source_home / ".env"
+    if credentials_file is not None and not selected_credentials.is_file():
+        raise ConfigError(f"credentials file missing: {selected_credentials}")
+    source_values = _env_file(selected_credentials)
     auth = source_home / "auth.json"
     if not auth.is_file():
         raise ConfigError(f"credential source missing: {auth}")
@@ -83,8 +88,8 @@ def configure_arm_homes(
         config_path.write_text(yaml.safe_dump(_plain(hermes), sort_keys=False), encoding="utf-8")
         os.chmod(config_path, 0o600)
         (home / "auth.json").symlink_to(auth)
-        resolved = {key: os.environ.get(key, source_values.get(key)) for key in allowlist}
-        missing = sorted(key for key, value in resolved.items() if value is None)
+        resolved = {key: os.environ.get(key) or source_values.get(key) for key in allowlist}
+        missing = sorted(key for key, value in resolved.items() if not value)
         if missing:
             raise ConfigError(f"required credential keys missing: {missing}")
         env_path = home / ".env"
@@ -145,6 +150,7 @@ def prepare_run(
     run_dir: Path,
     compatibility: CompatibilityResult,
     source_home: Path | None = None,
+    credentials_file: Path | None = None,
 ) -> RunManifest:
     provenance = verify_upstream_revision(root, config.upstream_commit)
     selected = select_questions(discover_questions(root, config.question_globs), config.selection)
@@ -184,6 +190,7 @@ def prepare_run(
             stage / "homes",
             (source_home or Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))).resolve(),
             ((arm.name, arm.hermes, arm.credential_env) for arm in config.arms),
+            credentials_file=credentials_file,
         )
         (stage / "prepared.complete").write_text("2\n", encoding="ascii")
         os.replace(stage, run_dir)

@@ -13,6 +13,20 @@ Each worker batch contains only complete arm waves and starts through a common b
 For four arms, valid values are 4, 8, 12, and so on. A value such as 7 is rejected
 before provider calls can be scheduled.
 
-Plain and MoA arms use their Hermes configuration directly. Credentials are named only in `credential_env`; secret values must remain in the environment and are never copied into artifacts.
+Plain and MoA arms use their Hermes configuration directly. Credentials are named only in
+`credential_env`; secret values must never be placed in experiment YAML.
+
+`prepare` resolves each allowlisted name in this order:
+
+1. the environment inherited by the harness process;
+2. the dotenv file passed with `prepare --credentials-file PATH`;
+3. when that option is omitted, `$HERMES_HOME/.env` (or `~/.hermes/.env`).
+
+Only allowlisted names are copied to the isolated arm homes, with mode `0600`. The source path
+and secret values are not written to `config.snapshot.yaml` or `manifest.json`. This contract is
+portable across Linux and macOS: shell startup files, `/etc/environment`, systemd units, and
+launchd plists are intentionally not auto-discovered or interpreted. Arrange for the launching
+process to inherit the variables, or point `--credentials-file` at a dotenv file managed by the
+operator's secret tooling.
 
 Legacy flat generation retries, alternate scheduling booleans, two-arm configuration, and missing scoring contracts are unsupported.

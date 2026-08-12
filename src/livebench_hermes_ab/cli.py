@@ -52,6 +52,7 @@ def command_prepare(args: argparse.Namespace, config: ExperimentConfig) -> dict[
         config,
         args.run_dir,
         CompatibilityResult(version, verified, warning),
+        credentials_file=args.credentials_file,
     )
     return manifest_value(manifest)
 
@@ -131,6 +132,12 @@ def parser() -> argparse.ArgumentParser:
     for name in ("prepare", "run", "resume", "score"):
         command = commands.add_parser(name)
         command.add_argument("--run-dir", type=Path, required=True)
+        if name == "prepare":
+            command.add_argument(
+                "--credentials-file",
+                type=Path,
+                help="dotenv secret source; defaults to $HERMES_HOME/.env",
+            )
         if name == "resume":
             command.add_argument("--retry-excluded", action="store_true")
     return value

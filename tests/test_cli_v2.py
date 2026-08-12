@@ -11,3 +11,13 @@ def test_prepare_has_no_config_field_overrides() -> None:
     option_strings = {option for action in prepare._actions for option in action.option_strings}
     assert "--jobs" not in option_strings
     assert "--samples" not in option_strings
+    assert "--credentials-file" in option_strings
+
+
+def test_credentials_file_is_prepare_only() -> None:
+    commands = parser()._subparsers._group_actions[0].choices
+    for name in ("run", "resume", "score"):
+        option_strings = {
+            option for action in commands[name]._actions for option in action.option_strings
+        }
+        assert "--credentials-file" not in option_strings

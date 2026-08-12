@@ -91,6 +91,59 @@ def test_arm_homes_filter_credentials_and_subprocess_secrets(tmp_path: Path, mon
     assert "ALLOWED_API_KEY" not in environment
 
 
+def test_arm_homes_accept_explicit_credentials_file(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "auth.json").write_text('{"auth":true}\n')
+    (source / ".env").write_text("ALLOWED_API_KEY=wrong-default\n")
+    credentials = tmp_path / "portable.env"
+    credentials.write_text("ALLOWED_API_KEY=from-explicit-file\nOTHER_TOKEN=nope\n")
+    monkeypatch.delenv("ALLOWED_API_KEY", raising=False)
+
+    configure_arm_homes(
+        tmp_path / "homes",
+        source,
+        (("base", {"model": "frozen"}, ("ALLOWED_API_KEY",)),),
+        credentials_file=credentials,
+    )
+
+    assert (tmp_path / "homes" / "base" / ".env").read_text() == (
+        "ALLOWED_API_KEY=from-explicit-file\n"
+    )
+
+
+def test_process_environment_precedes_credentials_file(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "auth.json").write_text("{}\n")
+    credentials = tmp_path / "portable.env"
+    credentials.write_text("ALLOWED_API_KEY=from-file\n")
+    monkeypatch.setenv("ALLOWED_API_KEY", "from-process")
+
+    configure_arm_homes(
+        tmp_path / "homes",
+        source,
+        (("base", {"model": "frozen"}, ("ALLOWED_API_KEY",)),),
+        credentials_file=credentials,
+    )
+
+    assert (tmp_path / "homes" / "base" / ".env").read_text() == ("ALLOWED_API_KEY=from-process\n")
+
+
+def test_explicit_credentials_file_must_exist(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "auth.json").write_text("{}\n")
+
+    with pytest.raises(Exception, match="credentials file missing"):
+        configure_arm_homes(
+            tmp_path / "homes",
+            source,
+            (("base", {"model": "frozen"}, ("ALLOWED_API_KEY",)),),
+            credentials_file=tmp_path / "missing.env",
+        )
+
+
 def test_resume_uses_persisted_attempts_and_supports_third_attempt(tmp_path: Path) -> None:
     cell = CellId("base", "pair", "q", 1)
     store = FilesystemArtifactStore(tmp_path)
