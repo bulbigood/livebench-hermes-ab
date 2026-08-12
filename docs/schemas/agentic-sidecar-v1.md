@@ -31,6 +31,12 @@ The current source relationship is `public_authoritative_origin_livebench_member
 
 `mode` is one of `empty`, `gold`, `wrong`, or `candidate`. Commands cannot be supplied by the request. The sidecar executes only commands frozen in the cohort. Candidate mode requires a filtered `candidate.patch`; pinned hidden test evidence remains private.
 
+## Bounded trajectory boundary
+
+The provider-neutral trajectory runner accepts structured argv actions rather than shell strings. The Podman executor mounts only the isolated repository workspace, disables networking, uses a read-only root filesystem, drops all capabilities, enables `no-new-privileges`, and applies CPU, memory, PID, per-command, turn, and wall-clock limits. Raw command output is stored only under the private run directory. Public trajectory evidence contains status, timing, per-turn digests, a raw-trajectory digest, and a task/base/image-bound trajectory digest.
+
+The current no-provider vertical uses a synthetic inspection-and-submit trajectory followed by an explicitly test-only deterministic patch applicator. It proves the sandbox and lifecycle boundary; it is not model-quality evidence and does not invoke a provider.
+
 ## Result
 
 ```json

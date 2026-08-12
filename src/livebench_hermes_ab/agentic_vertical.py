@@ -9,6 +9,8 @@ from pathlib import Path
 
 from .agentic import AgenticCohort, AgenticStatus, AgenticTask, SidecarRequest, run_sidecar
 from .agentic_attempts import AgenticAttemptStore
+from .agentic_sandbox import PodmanWorkspaceExecutor
+from .agentic_trajectory import AgentAction, TrajectoryLimits, TrajectoryStatus, run_trajectory
 from .agentic_workspace import extract_candidate_patch, filter_hidden_test_changes
 from .domain import HarnessExecutionError
 
@@ -71,6 +73,12 @@ def _materialize_workspace(cohort: AgenticCohort, task: AgenticTask, workspace: 
         )
 
 
+def _memory_mb(value: str) -> int:
+    if not value.endswith("g") or not value[:-1].isdigit():
+        raise HarnessExecutionError(f"unsupported runtime memory value: {value}")
+    return int(value[:-1]) * 1024
+
+
 def _run_task(
     cohort: AgenticCohort,
     task: AgenticTask,
@@ -81,6 +89,28 @@ def _run_task(
     started = time.monotonic()
     _materialize_workspace(cohort, task, workspace)
     source = evidence_root / task.instance_id
+    trajectory_private = output_root / ".private" / task.instance_id / "trajectory"
+    trajectory_public = output_root / "trajectories" / f"{task.instance_id}.json"
+    trajectory = run_trajectory(
+        [AgentAction(("git", "status", "--short")), AgentAction.submit()],
+        workspace,
+        trajectory_private,
+        trajectory_public,
+        TrajectoryLimits(max_turns=3, wall_clock_seconds=120, command_timeout_seconds=60),
+        PodmanWorkspaceExecutor(
+            image=task.image,
+            executable=cohort.runtime.executable,
+            cpus=cohort.runtime.cpus,
+            memory_mb=_memory_mb(cohort.runtime.memory),
+        ),
+        context_digest=hashlib.sha256(
+            f"trajectory-v1:{task.instance_id}:{task.base_sha}:{task.image_digest}".encode()
+        ).hexdigest(),
+    )
+    if trajectory.status is not TrajectoryStatus.SUBMITTED:
+        raise HarnessExecutionError(
+            f"synthetic trajectory failed for {task.instance_id}: {trajectory.status.value}"
+        )
     _run(["git", "-C", str(workspace), "apply", str((source / "fix.patch").resolve())])
     extracted = extract_candidate_patch(workspace, task.base_sha)
     filtered = filter_hidden_test_changes(extracted.content, task.hidden_test_paths)
@@ -89,9 +119,6 @@ def _run_task(
     shutil.copy2(source / "test.patch", private / "test.patch")
     (private / "candidate.patch").write_bytes(filtered.content)
     result = run_sidecar(cohort, SidecarRequest(1, task.instance_id, "candidate", private))
-    trajectory = hashlib.sha256(
-        f"local-deterministic-patch-applicator-v1:{task.instance_id}".encode()
-    ).hexdigest()
     return {
         "schema_version": 1,
         "task_id": task.instance_id,
@@ -99,7 +126,7 @@ def _run_task(
         "status": result.status.value,
         "reason_code": None if result.reason_code is None else result.reason_code.value,
         "patch_sha256": filtered.sha256,
-        "trajectory_sha256": trajectory,
+        "trajectory_sha256": trajectory.bound_trajectory_sha256,
         "image_digest": result.image_digest,
         "elapsed_seconds": time.monotonic() - started,
         "removed_hidden_paths": list(filtered.removed_paths),
