@@ -1,15 +1,25 @@
+# Local environments and agent workspaces.
 .venv/
+.hermes/
 .hermes-runtime/
+
+# Python and test caches.
 __pycache__/
 .pytest_cache/
 .ruff_cache/
-runs/
-data/
 *.pyc
+.coverage
+
+# Generated benchmark outputs. Canonical test fixtures remain tracked under tests/fixtures/.
+runs/
+reports/
+artifacts/
+data/
+
+# Package build outputs.
 dist/
 build/
 *.egg-info/
-.coverage
 
 # Credentials and mutable Hermes state must never enter Git.
 .env
