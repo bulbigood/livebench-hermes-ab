@@ -32,6 +32,25 @@ def test_retry_codes_are_enum_values() -> None:
     assert ExclusionCode.CELL_TIMEOUT not in config.generation.retry.retryable_codes
 
 
+def test_scoring_precision_defaults_and_validation() -> None:
+    import yaml
+
+    value = yaml.safe_load(Path("config.yaml").read_text())
+    config = parse_config(value)
+    assert config.scoring.confidence_level == 0.95
+    assert config.scoring.target_margin_of_error == 0.05
+
+    value["scoring"]["confidence_level"] = 0.9
+    value["scoring"]["target_margin_of_error"] = 0.1
+    config = parse_config(value)
+    assert config.scoring.confidence_level == 0.9
+    assert config.scoring.target_margin_of_error == 0.1
+
+    value["scoring"]["confidence_level"] = 1.0
+    with pytest.raises(ConfigError, match="confidence_level"):
+        parse_config(value)
+
+
 def test_unknown_nested_arm_key_fails_closed() -> None:
     import yaml
 

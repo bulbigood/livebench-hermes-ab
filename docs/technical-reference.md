@@ -11,4 +11,11 @@ authoritative cell journal and do not participate in scoring.
 
 Execution and scoring bundles use complete generation directories with one atomic current-generation pointer. Readers never combine files from different generations. A fatal execution has no execution pointer. Scoring reads frozen terminal evidence, computes the common valid pair cohort across all arms, calculates one `ScoringResult`, and projects both JSON and Markdown from it. It does not invoke Hermes or mutate cell journals.
 
+Statistical reporting uses only the common valid cohort. Arm-level variance describes the spread
+of scored observations. Sample-count planning uses pooled within-task variance so differences
+between benchmark tasks are not misclassified as model sampling instability. For confidence
+level `c`, target margin `E`, pooled variance `s²`, and `T` tasks, the estimate is
+`ceil(z(c)² × s² / (T × E²))`, never less than the current samples per task. The estimate is
+withheld below five samples per task.
+
 The scheduler admits bounded work on completion, stops admission after a harness error, cancels work that has not started, drains active futures, persists drained terminal results, and chooses simultaneous fatal errors by the lowest frozen submission index. Balanced mode groups one or more complete arm waves into each worker batch, starts every cell in the batch through a common barrier, and joins the full batch before admitting another. Its worker count must be divisible by the arm count.

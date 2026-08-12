@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
+import statistics
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import NormalDist
 from types import MappingProxyType
 
 from .artifacts import ScoringBundle
@@ -28,6 +31,9 @@ class FrozenRun:
     planned_pairs: tuple[str, ...]
     outcomes: tuple[CellOutcome, ...]
     questions: Mapping[str, QuestionEvidence]
+    samples_per_task: int = 1
+    confidence_level: float = 0.95
+    target_margin_of_error: float = 0.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +42,19 @@ class ScoreRow:
     question_id: str
     arm: str
     score: float
+
+
+@dataclass(frozen=True, slots=True)
+class ArmStatistics:
+    observations: int
+    tasks: int
+    sample_variance: float | None
+    standard_deviation: float | None
+    standard_error: float | None
+    confidence_interval: tuple[float, float] | None
+    pooled_within_task_variance: float | None
+    recommended_samples_per_task: int | None
+    recommendation_basis: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +68,72 @@ class ScoringResult:
     comparisons: Mapping[str, float]
     exclusion_counts: Mapping[str, int]
     trace_audit: Mapping[str, int]
+    samples_per_task: int
+    minimum_common_samples_per_task: int
+    arm_statistics: Mapping[str, ArmStatistics]
+    confidence_level: float = 0.95
+    target_margin_of_error: float = 0.05
+
+
+def _arm_statistics(
+    rows: tuple[ScoreRow, ...],
+    arm_order: tuple[str, ...],
+    samples_per_task: int,
+    minimum_common_samples_per_task: int,
+    confidence_level: float = 0.95,
+    target_margin_of_error: float = 0.05,
+) -> Mapping[str, ArmStatistics]:
+    if samples_per_task < 1:
+        raise IntegrityError("samples per task must be positive")
+    z = NormalDist().inv_cdf(0.5 + confidence_level / 2)
+    result: dict[str, ArmStatistics] = {}
+    for arm in arm_order:
+        arm_rows = [row for row in rows if row.arm == arm]
+        values = [row.score for row in arm_rows]
+        variance = statistics.variance(values) if len(values) >= 2 else None
+        deviation = math.sqrt(variance) if variance is not None else None
+        error = deviation / math.sqrt(len(values)) if deviation is not None else None
+        mean = statistics.fmean(values)
+        interval = (mean - z * error, mean + z * error) if error is not None else None
+
+        by_question: dict[str, list[float]] = defaultdict(list)
+        for row in arm_rows:
+            by_question[row.question_id].append(row.score)
+        degrees = sum(len(group) - 1 for group in by_question.values() if len(group) >= 2)
+        pooled = (
+            sum(
+                (len(group) - 1) * statistics.variance(group)
+                for group in by_question.values()
+                if len(group) >= 2
+            )
+            / degrees
+            if degrees
+            else None
+        )
+        recommended = None
+        basis = None
+        if minimum_common_samples_per_task >= 5:
+            planning_variance = pooled
+            basis = "observed pooled within-task variance"
+            if planning_variance is None or planning_variance == 0:
+                planning_variance = 0.25
+                basis = "conservative [0,1] score-range variance bound"
+            estimated = math.ceil(
+                z * z * planning_variance / (len(by_question) * target_margin_of_error**2)
+            )
+            recommended = max(samples_per_task, estimated)
+        result[arm] = ArmStatistics(
+            len(values),
+            len(by_question),
+            variance,
+            deviation,
+            error,
+            interval,
+            pooled,
+            recommended,
+            basis,
+        )
+    return MappingProxyType(result)
 
 
 def reconcile_scoring_evidence(
@@ -123,16 +208,31 @@ def score_run(run: FrozenRun, adapters: Mapping[str, ScoreAdapter]) -> ScoringRe
         ),
         "invalid_traces": exclusions.get("INVALID_MOA_TRACE", 0),
     }
+    row_values = tuple(rows)
+    common_counts = Counter(row.question_id for row in row_values if row.arm == run.baseline_arm)
+    minimum_common_samples = min(common_counts.values())
     return ScoringResult(
         run.arm_order,
         run.baseline_arm,
         len(run.planned_pairs),
         common,
-        tuple(rows),
+        row_values,
         MappingProxyType(means),
         MappingProxyType(comparisons),
         MappingProxyType(dict(sorted(exclusions.items()))),
         MappingProxyType(trace_audit),
+        run.samples_per_task,
+        minimum_common_samples,
+        _arm_statistics(
+            row_values,
+            run.arm_order,
+            run.samples_per_task,
+            minimum_common_samples,
+            run.confidence_level,
+            run.target_margin_of_error,
+        ),
+        run.confidence_level,
+        run.target_margin_of_error,
     )
 
 
@@ -189,6 +289,27 @@ def _answer_text(record: Mapping[str, object]) -> str:
 
 
 def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
+    statistics_value = {
+        arm: {
+            "observations": item.observations,
+            "tasks": item.tasks,
+            "sample_variance": item.sample_variance,
+            "standard_deviation": item.standard_deviation,
+            "standard_error": item.standard_error,
+            "confidence_interval": list(item.confidence_interval)
+            if item.confidence_interval is not None
+            else None,
+            "pooled_within_task_variance": item.pooled_within_task_variance,
+            "recommended_samples_per_task": item.recommended_samples_per_task,
+            "recommendation_basis": item.recommendation_basis,
+        }
+        for arm, item in result.arm_statistics.items()
+    }
+    recommendations = [
+        item.recommended_samples_per_task
+        for item in result.arm_statistics.values()
+        if item.recommended_samples_per_task is not None
+    ]
     summary = {
         "schema_version": 2,
         "baseline_arm": result.baseline_arm,
@@ -200,6 +321,15 @@ def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
         "comparisons_vs_baseline": dict(result.comparisons),
         "exclusion_counts": dict(result.exclusion_counts),
         "trace_audit": dict(result.trace_audit),
+        "samples_per_task": result.samples_per_task,
+        "minimum_common_samples_per_task": result.minimum_common_samples_per_task,
+        "statistical_analysis": {
+            "confidence_level": result.confidence_level,
+            "target_margin_of_error": result.target_margin_of_error,
+            "sufficient_pilot_samples": result.minimum_common_samples_per_task >= 5,
+            "recommended_samples_per_task": max(recommendations) if recommendations else None,
+            "arms": statistics_value,
+        },
     }
     scores = [
         {"pair_id": row.pair_id, "question_id": row.question_id, "arm": row.arm, "score": row.score}

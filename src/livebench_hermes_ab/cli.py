@@ -106,14 +106,31 @@ def command_resume(args: argparse.Namespace) -> dict[str, object]:
 
 def command_score(args: argparse.Namespace) -> dict[str, object]:
     manifest, raw_questions, store = _load_frozen(args.run_dir)
+    frozen_config = load_config(args.run_dir / "config.snapshot.yaml")
     outcomes = store.load_committed_execution()
     questions = {
         str(q["question_id"]): QuestionEvidence(str(q["category"]), str(q["task"]), q)
         for q in raw_questions
     }
     pairs = tuple(dict.fromkeys(cell.id.pair_id for cell in manifest.cells))
+    sample_counts = {
+        len({cell.id.sample_index for cell in manifest.cells if cell.id.question_id == question_id})
+        for question_id in questions
+    }
+    if len(sample_counts) != 1:
+        raise IntegrityError("inconsistent samples per task in frozen workload")
+    samples_per_task = sample_counts.pop()
     result = score_run(
-        FrozenRun(manifest.arm_order, manifest.baseline_arm, pairs, outcomes, questions),
+        FrozenRun(
+            manifest.arm_order,
+            manifest.baseline_arm,
+            pairs,
+            outcomes,
+            questions,
+            samples_per_task=samples_per_task,
+            confidence_level=frozen_config.scoring.confidence_level,
+            target_margin_of_error=frozen_config.scoring.target_margin_of_error,
+        ),
         registry({q.task for q in questions.values()}),
     )
     store.publish_scoring(scoring_bundle(result, render_markdown_report(result)))

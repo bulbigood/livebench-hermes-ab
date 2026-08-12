@@ -21,6 +21,8 @@ class RetryPolicy:
 class ScoringContract:
     implementation: Literal["livebench-objective-ground-truth"]
     schema_version: int
+    confidence_level: float = 0.95
+    target_margin_of_error: float = 0.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,8 +104,14 @@ def _mapping(value: object, path: str) -> dict[str, object]:
     return value
 
 
-def _keys(value: dict[str, object], required: set[str], path: str) -> None:
-    missing, extra = required - value.keys(), value.keys() - required
+def _keys(
+    value: dict[str, object],
+    required: set[str],
+    path: str,
+    optional: set[str] = frozenset(),
+) -> None:
+    missing = required - value.keys()
+    extra = value.keys() - required - optional
     if extra:
         raise ConfigError(f"{path} contains unsupported keys: {sorted(extra)}")
     if missing:
@@ -232,12 +240,23 @@ def parse_config(value: object) -> ExperimentConfig:
     hermes_compat = _mapping(compatibility["hermes"], "compatibility.hermes")
     _keys(hermes_compat, {"profile"}, "compatibility.hermes")
     scoring = _mapping(root["scoring"], "scoring")
-    _keys(scoring, {"implementation", "schema_version"}, "scoring")
+    _keys(
+        scoring,
+        {"implementation", "schema_version"},
+        "scoring",
+        {"confidence_level", "target_margin_of_error"},
+    )
     if (
         scoring["implementation"] != "livebench-objective-ground-truth"
         or scoring["schema_version"] != 2
     ):
         raise ConfigError("unsupported scoring contract")
+    confidence_level = float(scoring.get("confidence_level", 0.95))
+    target_margin = float(scoring.get("target_margin_of_error", 0.05))
+    if not 0 < confidence_level < 1:
+        raise ConfigError("scoring.confidence_level must be between 0 and 1")
+    if not 0 < target_margin < 1:
+        raise ConfigError("scoring.target_margin_of_error must be between 0 and 1")
     arms = _parse_arms(root["arms"])
     baseline = execution["baseline_arm"]
     if baseline not in {arm.name for arm in arms}:
@@ -261,7 +280,9 @@ def parse_config(value: object) -> ExperimentConfig:
             mode, workers, _positive_int(execution["timeout_seconds"], "execution.timeout_seconds")
         ),  # type: ignore[arg-type]
         compatibility=CompatibilityConfig(str(hermes_compat["profile"])),
-        scoring=ScoringContract("livebench-objective-ground-truth", 2),
+        scoring=ScoringContract(
+            "livebench-objective-ground-truth", 2, confidence_level, target_margin
+        ),
     )
     validate_balanced_workers(config)
     return config

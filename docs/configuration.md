@@ -4,6 +4,19 @@
 
 Arm mapping order is declaration order and becomes the mandatory manifest `arm_order`. The default order is `base`, `gpt_medium`, `moa_minimax`, `moa_mimo`. `execution.mode` is either `streaming` or `balanced_waves`. Retry behavior is represented once by `generation.retry.max_attempts` and `retryable_codes`. The scoring contract must name `livebench-objective-ground-truth` with schema version 2.
 
+The scoring contract also accepts optional statistical precision settings:
+
+```yaml
+scoring:
+  implementation: livebench-objective-ground-truth
+  schema_version: 2
+  confidence_level: 0.95
+  target_margin_of_error: 0.05
+```
+
+Their defaults are 95% confidence and ±0.05 score units. They are frozen in
+`config.snapshot.yaml`; rescoring therefore does not depend on the caller's current config.
+
 Samples, scheduling mode, and worker count have one source of truth:
 `generation.samples_per_task`, `execution.mode`, and `execution.workers` in the YAML
 configuration. `prepare` freezes that configuration without CLI field overrides.
@@ -30,3 +43,12 @@ process to inherit the variables, or point `--credentials-file` at a dotenv file
 operator's secret tooling.
 
 Legacy flat generation retries, alternate scheduling booleans, two-arm configuration, and missing scoring contracts are unsupported.
+
+The Markdown and JSON scoring reports include observation count, sample variance, standard
+deviation, standard error, confidence interval, pooled within-task variance, and a recommended
+`samples_per_task`. With fewer than five repeated samples per task, the report warns that the
+pilot is too small and does not estimate a required sample count. With five or more samples, the
+recommendation uses the observed pooled within-task variance and the configured confidence and
+margin. Zero or unavailable pilot variance uses a conservative variance bound for scores in
+`[0,1]`. The recommendation is an approximate pilot estimate, not a guarantee: it should be
+recomputed after a larger wave because future variance can differ from the pilot.
