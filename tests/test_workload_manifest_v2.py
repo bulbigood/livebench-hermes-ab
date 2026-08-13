@@ -19,6 +19,7 @@ from livebench_hermes_ab.manifest import (
     serialize_manifest,
     verify_frozen_artifacts,
 )
+from livebench_hermes_ab.scoring_adapters import objective_score, registry
 from livebench_hermes_ab.workload import Question, build_workload, select_questions
 
 
@@ -83,6 +84,39 @@ def test_selection_rejects_question_removed_on_experiment_release() -> None:
 
     with pytest.raises(ConfigError, match="not active for release 2026-06-25"):
         select_questions((question,), config, "2026-06-25")
+
+
+def test_scoring_registry_rejects_unsupported_tasks_before_paid_execution() -> None:
+    with pytest.raises(IntegrityError, match="unsupported objective scoring tasks: unknown"):
+        registry({"unknown"})
+
+
+def test_scoring_registry_supports_deterministic_replacement_families() -> None:
+    tasks = {"math_comp", "olympiad", "cta", "connections"}
+    assert set(registry(tasks)) == tasks
+
+
+def test_replacement_family_scorers_accept_known_ground_truth() -> None:
+    import json
+
+    paths = {
+        "math_comp": Path("data/live_bench/math/math_comp/question.jsonl"),
+        "olympiad": Path("data/live_bench/math/olympiad/question.jsonl"),
+        "cta": Path("data/live_bench/data_analysis/cta/question.jsonl"),
+        "connections": Path("data/live_bench/language/connections/question.jsonl"),
+    }
+    for task, path in paths.items():
+        question = json.loads(path.read_text().splitlines()[0])
+        truth = str(question["ground_truth"])
+        if task == "math_comp":
+            answer = truth
+        elif task == "olympiad":
+            answer = f"Answer: {truth}"
+        elif task == "connections":
+            answer = f"<solution>{truth}</solution>"
+        else:
+            answer = truth
+        assert objective_score(question, answer) == 1.0
 
 
 def test_manifest_rejects_invalid_matrix_and_frozen_artifact_drift(tmp_path: Path) -> None:

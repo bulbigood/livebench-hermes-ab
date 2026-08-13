@@ -1,6 +1,6 @@
 # LiveBench Hermes multi-arm harness
 
-This repository runs a frozen four-arm Hermes experiment using a typed, schema-versioned harness. The default matrix contains 15 questions, five samples, and four arms: 300 cells and 450 provider calls.
+This repository runs a frozen four-arm Hermes experiment using a typed, schema-versioned harness. The default matrix contains 15 scenarios, ten samples per scenario, and four arms: 600 cells and 900 provider calls. The current hard cohort replaces saturated pilot scenarios with output-blind selections from deterministic instruction-following, mathematics, language, and data-analysis families.
 
 Always prepare before any paid execution:
 
@@ -46,4 +46,5 @@ See [configuration](docs/configuration.md), [technical reference](docs/technical
 
 ## Evaluation results
 
+- [Hard cohort v10 selection](docs/evals/hard-cohort-v10.md) — fixed 15 × 10 matrix replacing saturated scenarios with output-blind deterministic families; not yet a scored result.
 - [2026-08-13 full paid run](docs/evals/results/2026-08-13-full-paid.md) — 600 cells, 139/150 common-valid pairs; `moa_mimo` achieved the highest mean score at 0.9285.

@@ -156,6 +156,9 @@ def prepare_run(
     selected = select_questions(
         discover_questions(root, config.question_globs), config.selection, config.release
     )
+    from .scoring_adapters import registry
+
+    registry({question.family for question in selected})
     workload = build_workload(
         selected, config.arms, config.generation.samples_per_task, config.seed
     )

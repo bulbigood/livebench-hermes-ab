@@ -17,7 +17,46 @@ def _enable_pinned_livebench() -> None:
 def objective_score(question: Mapping[str, object], answer: str) -> float:
     _enable_pinned_livebench()
     task = str(question["task"])
-    truth = question.get("ground_truth")
+    truth = str(question.get("ground_truth", ""))
+    if task == "math_comp":
+        from livebench.process_results.math.math_competitions.utils import (
+            aime_process_results,
+            mathcontest_process_results,
+        )
+
+        subtask = str(question.get("subtask", ""))
+        subtask_parts = subtask.split("_")
+        if "amc" in subtask_parts or "smc" in subtask_parts:
+            return float(
+                mathcontest_process_results(
+                    truth, answer, str(question["turns"][0]), debug=False  # type: ignore[index]
+                )
+            )
+        if subtask.startswith("aime"):
+            return float(aime_process_results(truth, answer, debug=False))
+        raise IntegrityError(f"unsupported math_comp subtask: {subtask}")
+    if task == "olympiad":
+        from livebench.process_results.math.olympiad.utils import (
+            proof_rearrangement_process_results,
+        )
+
+        return float(
+            proof_rearrangement_process_results(truth, answer, edit_distance=True, debug=False)
+        )
+    if task == "cta":
+        from livebench.process_results.data_analysis.cta.utils import cta_process_results
+
+        return float(cta_process_results(truth, answer, debug=False))
+    if task == "connections":
+        from livebench.process_results.writing.connections.utils import (
+            get_connections_puzzle_evaluator,
+        )
+
+        return float(
+            get_connections_puzzle_evaluator(str(question["livebench_release_date"]))(
+                truth, answer, debug=False
+            )
+        )
     if task == "spatial":
         from livebench.process_results.reasoning.spatial.utils import spatial_process_results
 
@@ -78,6 +117,22 @@ def instruction_score(question: Mapping[str, object], answer: str) -> float:
 
 def registry(tasks: set[str]):
     instruction_tasks = {"summarize", "simplify", "paraphrase", "story_generation"}
+    objective_tasks = {
+        "math_comp",
+        "olympiad",
+        "cta",
+        "connections",
+        "spatial",
+        "zebra_puzzle",
+        "tablejoin",
+        "tablereformat",
+        "exact_match",
+    }
+    unsupported = tasks - instruction_tasks - objective_tasks
+    if unsupported:
+        raise IntegrityError(
+            "unsupported objective scoring tasks: " + ", ".join(sorted(unsupported))
+        )
     return {
         task: instruction_score if task in instruction_tasks else objective_score for task in tasks
     }

@@ -1,7 +1,7 @@
 # Harness settings are outside each arm. Every arms.<name>.hermes subtree is
 # copied verbatim to runs/<run>/homes/<name>/config.yaml. Never put secrets here.
 experiment:
-  id: livebench-hermes-targeted-moa-15x10-v9
+  id: livebench-hermes-hard-cohort-15x10-v10
   upstream_commit: 00eae856aa1c1a9e9d058a65a9a94d85884034c4
   release: '2026-06-25'
   seed: 5615
@@ -9,45 +9,41 @@ experiment:
   - data/live_bench/*/*/question.jsonl
 selection:
   # One experiment-global list. Every arm receives these exact scenarios.
-  # `id` selects a pinned LiveBench record; `family` is a checked assertion.
+  # Candidates were selected output-blind from records active in the pinned release.
   scenarios:
     instruction_following:
-    - id: 3bde3f0d0cc7481da49d15758f8c32dbfff6eb2184c2cbd3fbbd15665ec8102d
-      family: summarize
-    - id: 469c2a921e910fce7859e4c351f41c9a4cda6b028386904aa22afa09cbba5351
-      family: summarize
-    - id: 77b0d92b8c174846eb6e247732cf556425226986a552b208ec107a5e8faeaba8
+    - id: 0503923535fbd8badfb2ccf38989b36a8ecaa2eda332a4b515bb13932421fecd
       family: simplify
-    - id: a365e843fd014371b5de486fb1f161db1a3497dd3338268d33d5569f5f4d7185
+    - id: 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5
       family: paraphrase
-    - id: dbf2644a22244d678a05dab31e931414656027ac2b4ca9095efc1ebf0903048d
+    - id: c0e4dc6b1c4cca07e408c5952ee4013a46a8663f0fc7684453ed5ce56b87e0c9
       family: story_generation
-    reasoning:
-    - id: bd14ba82d1fe813dcdf6c16f0f868e5f3fe92e4cee9cf5eb3fd5cb6f03d68517
-      family: zebra_puzzle
-      note: level 15; short 1211-character prompt
-    - id: c833574b0ff6e8609bee19b36fabc48501cdcd9a64b99cd0422f54ada1acc53d
-      family: zebra_puzzle
-      note: level 20
-    - id: 2102018493646d369865e04813606d3170a25f31f0fad3aece558969b56f97d0
-      family: zebra_puzzle
-      note: level 20
-    - id: 20d48b97e524cd64f82b0e4fb3c597a37bae1d9357e9b2c93aad96b4c70e098e
-      family: zebra_puzzle
-      note: level 16
-    - id: b1b1678a4f290c8ab2b85f957a0cdbba93ef0c97d1e7ab4663e46e92ebac70e8
-      family: zebra_puzzle
-      note: level 17
+    math:
+    - id: b241aac6ed7f653107d3c9bb1e5cad42495fcaf7dc530316c4fff751471a4d65
+      family: math_comp
+    - id: 504e4f0317a2bb481c7878ee625c1686135211da8df19744d2b78c9598f13761
+      family: math_comp
+    - id: a84e6c888591b8182c32e6ed18291d6eaf9eee366fa818b014e9da41028f9576
+      family: math_comp
+    - id: 2dd75e080f3e276f3dcf304d970e6a03973ddf777537422c9aba59559ddc9594
+      family: olympiad
+    - id: 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115
+      family: olympiad
+    - id: e5b72d9cdb39c6e5f8798a557f119fff35d98fd165f55659e71bf6ac38b5f178
+      family: olympiad
+    language:
+    - id: 27662d962f1e50ef82296d3b3e60ea96b719aee5d821f390beb1fd4af4e5385f
+      family: connections
+    - id: d1fa30fdaf510249ebfb000dbf2c8369b1eba32ad681d242a42965b861702aa2
+      family: connections
+    - id: 7327ff4cf4a089d1ef9959d6f4482b1238590f404e24f1fd48988965ec6e121b
+      family: connections
     data_analysis:
-    - id: dc753a46614f7f4d1c839d06ec864324f8b6142e30bf804dae6aae8b6eb91941
+    - id: d89584191190995d5cb7307c938dbfb201e3af17ed7f666c2afae0fe2ad55985
       family: tablejoin
-    - id: 2f1500d37ffd0e42cd2c89c04011cbbf5dd6b1f71f495156b016a967270cdded
+    - id: a783dc9652728632d05f85ac5f944f71ffdfb2cc9dc6ea27e21ad80a96f44e48
       family: tablejoin
-    - id: bd4b2031ad50538f365ac3312534d813fb7326fd90cf5056ac80b31d189cbb15
-      family: tablejoin
-    - id: a215b90180b104679133c979614fe0feeb770b6a3d1df4d41065e15be2ed7051
-      family: tablejoin
-    - id: 587e13e04d18246f787cc8d41da67701eb1343795150a63b1996c5ec8270b20e
+    - id: 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300
       family: tablejoin
 generation:
   samples_per_task: 10
