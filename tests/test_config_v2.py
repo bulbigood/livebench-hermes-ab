@@ -18,7 +18,8 @@ def test_default_config_is_strict_typed_and_ordered() -> None:
     assert config.execution.mode == "streaming"
     assert config.scoring.schema_version == 2
     assert config.generation.retry.retryable_codes == frozenset()
-    assert config.experiment_id == "livebench-hermes-targeted-moa-15x5-v8"
+    assert config.experiment_id == "livebench-hermes-targeted-moa-15x10-v9"
+    assert config.generation.samples_per_task == 10
     reasoning_ids = {item["id"] for item in config.selection.scenarios["reasoning"]}
     assert {
         "20d48b97e524cd64f82b0e4fb3c597a37bae1d9357e9b2c93aad96b4c70e098e",
