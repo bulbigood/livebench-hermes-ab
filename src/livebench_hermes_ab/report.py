@@ -1,11 +1,72 @@
 from __future__ import annotations
 
+import statistics
+
+import yaml
+
 from .scoring import (
     ScoringResult,
     grouped_statistics,
     paired_decision_analysis,
     timing_statistics,
 )
+
+
+def _hermes_source(config_snapshot: str) -> str:
+    root = yaml.safe_load(config_snapshot)
+    if not isinstance(root, dict):
+        raise TypeError("frozen config must be a mapping")
+    compatibility = root.get("compatibility")
+    if not isinstance(compatibility, dict) or not isinstance(compatibility.get("hermes"), dict):
+        raise TypeError("frozen config is missing compatibility.hermes")
+    hermes = compatibility["hermes"]
+    if "repository" in hermes and "commit" in hermes:
+        return f"{hermes['repository']} @ {hermes['commit']}"
+    if "directory" in hermes:
+        return str(hermes["directory"])
+    release = hermes.get("release", hermes.get("profile"))
+    if release is None:
+        raise ValueError("frozen config has no supported Hermes source")
+    return f"release {release} (source commit not recorded)"
+
+
+def _provenance(config_snapshot: str | None, observed_hermes: str | None) -> list[str]:
+    if config_snapshot is None:
+        return []
+    lines = [
+        "",
+        "## Run provenance",
+        "",
+        f"Hermes source: `{_hermes_source(config_snapshot)}`",
+    ]
+    if observed_hermes is not None:
+        lines.append(f"Observed Hermes: `{observed_hermes}`")
+    lines.extend(
+        [
+            "",
+            "<details>",
+            "<summary>Frozen run configuration</summary>",
+            "",
+            "```yaml",
+            config_snapshot.rstrip(),
+            "```",
+            "",
+            "</details>",
+        ]
+    )
+    return lines
+
+
+def _arm_median(result: ScoringResult, arm: str) -> float:
+    return float(statistics.median(row.score for row in result.rows if row.arm == arm))
+
+
+def _paired_score_deltas(result: ScoringResult, arm: str) -> list[float]:
+    scores = {(row.pair_id, row.arm): row.score for row in result.rows}
+    return [
+        scores[(pair, arm)] - scores[(pair, result.baseline_arm)]
+        for pair in result.common_pairs
+    ]
 
 
 def _statistical_analysis(result: ScoringResult) -> list[str]:
@@ -46,8 +107,8 @@ def _paired_decision_analysis(result: ScoringResult) -> list[str]:
         "",
         "The verdict uses a two-sided 95% confidence interval for common-valid paired score differences. Sample projections assume the observed effect and paired-difference variance persist; they are planning estimates, not guarantees.",
         "",
-        "| Candidate vs baseline | n | Mean delta | 95% CI | Verdict | Projected CI-excluding-zero samples/scenario | 95% power samples/scenario |",
-        "|---|---:|---:|---:|---|---:|---:|",
+        "| Candidate vs baseline | n | Mean delta | Median delta | 95% CI | Verdict | Projected CI-excluding-zero samples/scenario | 95% power samples/scenario |",
+        "|---|---:|---:|---:|---:|---|---:|---:|",
     ]
     for arm, item in comparisons.items():
         assert isinstance(item, dict)
@@ -58,9 +119,11 @@ def _paired_decision_analysis(result: ScoringResult) -> list[str]:
         )
         projected = item["required_samples_per_scenario_for_projected_ci_excluding_zero"]
         powered = item["required_samples_per_scenario_for_95_percent_power"]
+        median_delta = statistics.median(_paired_score_deltas(result, arm))
         lines.append(
             f"| {arm} vs {result.baseline_arm} | {item['observations']} | "
-            f"{float(item['observed_mean_delta']):.4f} | {rendered_interval} | {item['verdict']} | "
+            f"{float(item['observed_mean_delta']):.4f} | {median_delta:.4f} | "
+            f"{rendered_interval} | {item['verdict']} | "
             f"{'Unavailable' if projected is None else projected} | "
             f"{'Unavailable' if powered is None else powered} |"
         )
@@ -281,17 +344,22 @@ def _timing_statistics(result: ScoringResult) -> list[str]:
     ]
 
 
-def render_markdown_report(result: ScoringResult) -> str:
+def render_markdown_report(
+    result: ScoringResult,
+    config_snapshot: str | None = None,
+    observed_hermes: str | None = None,
+) -> str:
     lines = [
         "# LiveBench Hermes experiment",
         "",
         f"Common paired coverage: {len(result.common_pairs)}/{result.planned_pairs}",
         "",
-        "| Arm | Mean |",
-        "|---|---:|",
+        "| Arm | Mean | Median |",
+        "|---|---:|---:|",
     ]
     for arm in result.arm_order:
-        lines.append(f"| {arm} | {result.arm_means[arm]:.4f} |")
+        lines.append(f"| {arm} | {result.arm_means[arm]:.4f} | {_arm_median(result, arm):.4f} |")
+    lines.extend(_provenance(config_snapshot, observed_hermes))
     if result.exclusion_counts:
         lines.extend(["", "## Exclusions", ""])
         lines.extend(f"- {code}: {count}" for code, count in result.exclusion_counts.items())

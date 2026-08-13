@@ -2,10 +2,153 @@
 
 Common paired coverage: 295/300
 
-| Arm | Mean |
-|---|---:|
-| base | 0.7740 |
-| moa_mimo | 0.7635 |
+| Arm | Mean | Median |
+|---|---:|---:|
+| base | 0.7740 | 0.9167 |
+| moa_mimo | 0.7635 | 0.8723 |
+
+## Run provenance
+
+Hermes source: `release 0.19.1 (source commit not recorded)`
+Observed Hermes: `0.19.1`
+
+<details>
+<summary>Frozen run configuration</summary>
+
+```yaml
+# Harness settings are outside each arm. Every arms.<name>.hermes subtree is
+# copied verbatim to runs/<run>/homes/<name>/config.yaml. Never put secrets here.
+experiment:
+  id: livebench-hermes-confirmatory-15x20-v14
+  upstream_commit: 00eae856aa1c1a9e9d058a65a9a94d85884034c4
+  release: '2026-06-25'
+  seed: 5615
+  question_globs:
+  - data/live_bench/*/*/question.jsonl
+selection:
+  # One experiment-global list. Every arm receives these exact scenarios.
+  # Candidates were selected output-blind from records active in the pinned release.
+  scenarios:
+    instruction_following:
+    - id: 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5
+      family: paraphrase
+    math:
+    - id: a84e6c888591b8182c32e6ed18291d6eaf9eee366fa818b014e9da41028f9576
+      family: math_comp
+    - id: 2dd75e080f3e276f3dcf304d970e6a03973ddf777537422c9aba59559ddc9594
+      family: olympiad
+    - id: 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115
+      family: olympiad
+    - id: e5b72d9cdb39c6e5f8798a557f119fff35d98fd165f55659e71bf6ac38b5f178
+      family: olympiad
+    - id: 527d5f9f9cf27824b84109a495eeced7c7c097fb324b872212f6813a660e5ee4
+      family: olympiad
+    - id: 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536
+      family: olympiad
+    - id: 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7
+      family: olympiad
+    - id: 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421
+      family: olympiad
+    data_analysis:
+    - id: d89584191190995d5cb7307c938dbfb201e3af17ed7f666c2afae0fe2ad55985
+      family: tablejoin
+    - id: a783dc9652728632d05f85ac5f944f71ffdfb2cc9dc6ea27e21ad80a96f44e48
+      family: tablejoin
+    - id: 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300
+      family: tablejoin
+    - id: d3d910189e70e5e5edd9a3f76420da1e8a5578b966ceef1c3936fb6b8e456551
+      family: cta
+    - id: 4d351c29bdddf5c41d59cd7bd1b70bb4d2ae2a071ada382d7690066b1cd7764c
+      family: tablejoin
+    - id: d4b2efd567053821eedf1ea3f759d4948f50264b94bd6ff37b18bc92e79d4fc1
+      family: tablejoin
+generation:
+  samples_per_task: 20
+  retry:
+    max_attempts: 2
+    retryable_codes: []
+execution:
+  mode: streaming
+  workers: auto
+  timeout_seconds: 1800
+  baseline_arm: base
+compatibility:
+  # Verified reference profile. Another installed version is allowed with a
+  # persistent unverified-version warning; changing this string does not add support.
+  hermes:
+    profile: 0.19.1
+arms:
+  base:
+    credential_env: []
+    hermes:
+      model:
+        provider: openai-codex
+        default: gpt-5.6-sol
+      agent:
+        reasoning_effort: low
+        disabled_toolsets: &id001
+        - web
+        - browser
+        - terminal
+        - file
+        - code_execution
+        - vision
+        - video
+        - image_gen
+        - video_gen
+        - bfl
+        - x_search
+        - tts
+        - stt
+        - skills
+        - todo
+        - memory
+        - context_engine
+        - session_search
+        - clarify
+        - delegation
+        - cronjob
+        - homeassistant
+        - spotify
+        - yuanbao
+        - computer_use
+      moa:
+        enabled: false
+        save_traces: false
+  moa_mimo:
+    credential_env:
+    - OPENROUTER_API_KEY
+    hermes:
+      model:
+        provider: moa
+        default: default
+      agent:
+        disabled_toolsets: *id001
+      moa:
+        enabled: true
+        default_preset: default
+        active_preset: default
+        save_traces: true
+        presets:
+          default:
+            enabled: true
+            degraded_reference_policy: loud
+            reference_max_tokens: 50000
+            max_tokens: 4096
+            fanout: every_n:3
+            reference_models:
+            - provider: openrouter
+              model: xiaomi/mimo-v2.5
+            aggregator:
+              provider: openai-codex
+              model: gpt-5.6-sol
+              reasoning_effort: low
+scoring:
+  implementation: livebench-objective-ground-truth
+  schema_version: 2
+```
+
+</details>
 
 ## Exclusions
 
@@ -21,9 +164,9 @@ Common paired coverage: 295/300
 
 The verdict uses a two-sided 95% confidence interval for common-valid paired score differences. Sample projections assume the observed effect and paired-difference variance persist; they are planning estimates, not guarantees.
 
-| Candidate vs baseline | n | Mean delta | 95% CI | Verdict | Projected CI-excluding-zero samples/scenario | 95% power samples/scenario |
-|---|---:|---:|---:|---|---:|---:|
-| moa_mimo vs base | 295 | -0.0105 | [-0.0503, 0.0292] | inconclusive | 280 | 947 |
+| Candidate vs baseline | n | Mean delta | Median delta | 95% CI | Verdict | Projected CI-excluding-zero samples/scenario | 95% power samples/scenario |
+|---|---:|---:|---:|---:|---|---:|---:|
+| moa_mimo vs base | 295 | -0.0105 | 0.0000 | [-0.0503, 0.0292] | inconclusive | 280 | 947 |
 
 ## Score by scenario
 

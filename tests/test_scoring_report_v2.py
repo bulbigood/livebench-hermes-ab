@@ -42,6 +42,42 @@ def test_common_cohort_intersects_every_arm_and_report_preserves_order() -> None
     assert "| 1 | 1 | Unavailable |" in report
 
 
+def test_report_pairs_mean_with_median_and_embeds_frozen_config_provenance() -> None:
+    outcomes = tuple(
+        ValidOutcome(
+            CellId(arm, f"q1-s{sample}", "q1", sample),
+            {"answer": answer},
+            float(sample),
+        )
+        for sample, answers in ((1, ("0", "1")), (2, ("1", "1")))
+        for arm, answer in zip(("base", "candidate"), answers, strict=True)
+    )
+    result = score_run(
+        FrozenRun(
+            ("base", "candidate"),
+            "base",
+            ("q1-s1", "q1-s2"),
+            outcomes,
+            {"q1": QuestionEvidence("math", "olympiad", {})},
+            samples_per_task=2,
+        ),
+        {"olympiad": lambda _q, answer: float(answer)},
+    )
+    snapshot = "compatibility:\n  hermes:\n    repository: https://example.test/hermes.git\n    commit: 0123456789012345678901234567890123456789\n"
+    report = render_markdown_report(result, snapshot, "Hermes Agent v0.20.1")
+
+    headers = [line for line in report.splitlines() if line.startswith("|") and "---" not in line]
+    for header in headers:
+        assert ("Mean" in header) == ("Median" in header), header
+    assert "| Arm | Mean | Median |" in report
+    assert "| Candidate vs baseline | n | Mean delta | Median delta | 95% CI |" in report
+    assert "Hermes source: `https://example.test/hermes.git @ 0123456789012345678901234567890123456789`" in report
+    assert "Observed Hermes: `Hermes Agent v0.20.1`" in report
+    assert "<details>" in report
+    assert "<summary>Frozen run configuration</summary>" in report
+    assert snapshot.rstrip() in report
+
+
 def test_report_includes_variance_confidence_interval_and_sample_recommendation() -> None:
     arms = ("base", "candidate")
     outcomes = []

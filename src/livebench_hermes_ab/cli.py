@@ -150,6 +150,7 @@ def command_resume(args: argparse.Namespace) -> dict[str, object]:
 
 def command_score(args: argparse.Namespace) -> dict[str, object]:
     manifest, raw_questions, store = _load_frozen(args.run_dir)
+    config_snapshot = (args.run_dir / "config.snapshot.yaml").read_text()
     frozen_config = load_config(args.run_dir / "config.snapshot.yaml")
     outcomes = store.load_committed_execution()
     questions = {
@@ -177,7 +178,12 @@ def command_score(args: argparse.Namespace) -> dict[str, object]:
         ),
         registry({q.task for q in questions.values()}),
     )
-    store.publish_scoring(scoring_bundle(result, render_markdown_report(result)))
+    report = render_markdown_report(
+        result,
+        config_snapshot,
+        manifest.compatibility.installed_version,
+    )
+    store.publish_scoring(scoring_bundle(result, report))
     return {
         "status": "complete",
         "common_valid_pairs": len(result.common_pairs),
