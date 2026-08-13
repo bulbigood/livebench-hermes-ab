@@ -67,25 +67,4 @@ See [configuration](docs/configuration.md), [technical reference](docs/technical
 
 ## Evaluation results
 
-### V13 selection cohort — 2026-08-13
-
-The completed two-arm paid run executed **300/300 cells** and retained **149/150 common-valid pairs (99.33%)**. `moa_mimo` scored **0.7664** versus **0.7280** for `base`; the paired delta was +0.0384, but its 95% CI `[-0.0126, 0.0894]` crossed zero.
-
-All six output-blind replacements escaped ceiling saturation. The two new `olympiad` tasks and `tablejoin` `4d351c29` provided useful headroom, while both CTA replacements landed at or near the floor and should be replaced again. The accidental OpenRouter spending-limit change caused no provider error: 299 cells were valid, one had an invalid MoA trace, and no retry was needed.
-
-See the [full v13 selection report](docs/evals/results/2026-08-13-full-paid-v13-selection.md) and the [predeclared selection protocol](docs/evals/hard-cohort-v13-selection.md).
-
-### Hard cohort v10 — 2026-08-13
-
-The completed paid run executed **600/600 cells**. Primary scoring used **119/150 common-valid pairs (79.33%)**:
-
-| Rank | Arm | Mean | Delta vs `base` |
-|---:|---|---:|---:|
-| 1 | `moa_minimax` | **0.9494** | +0.0276 |
-| 2 | `moa_mimo` | **0.9489** | +0.0271 |
-| 3 | `gpt_medium` | **0.9256** | +0.0038 |
-| 4 | `base` | **0.9218** | — |
-
-`moa_minimax` led `moa_mimo` by only **0.0005**. All paired 95% confidence intervals for improvements over `base` crossed zero, so the run ranks the arms but does not establish confirmatory superiority. Reliability also differed materially: 31 pairs were excluded due to 26 invalid MoA traces and 5 timeouts; 27 excluded cells belonged to `moa_minimax`, 4 to `moa_mimo`, and none to the non-MoA arms. Six of the 15 scenarios remained fully saturated.
-
-See the [full hard-cohort v10 report](docs/evals/results/2026-08-13-hard-cohort-v10.md) for scenario-level scores, category results, exclusions, trace-token totals, confidence intervals, and comparison with v9.
+- [Latest evaluation: v13 selection cohort, 2026-08-13](docs/evals/results/2026-08-13-full-paid-v13-selection.md)
