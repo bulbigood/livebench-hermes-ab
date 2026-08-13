@@ -1,6 +1,6 @@
 # LiveBench Hermes multi-arm harness
 
-This repository runs a frozen two-arm Hermes experiment using a typed, schema-versioned harness. The default matrix contains 15 scenarios, ten samples per scenario, and two arms: 300 cells and at most 450 provider calls. The active arms are `base` and `moa_mimo`; `moa_minimax` and `gpt_medium` are no longer part of future runs. The current hard cohort uses output-blind selections from deterministic instruction-following, mathematics, language, and data-analysis families.
+This repository runs a frozen two-arm Hermes experiment using a typed, schema-versioned harness. The default matrix contains 15 scenarios, ten samples per scenario, and two arms: 300 cells and at most 450 provider calls. The active arms are `base` and `moa_mimo`; `moa_minimax` and `gpt_medium` are no longer part of future runs. The active v13 selection cohort replaces six scenarios that were exactly saturated for the current arms with output-blind `olympiad`, `tablejoin`, and `cta` candidates.
 
 ## Safe default run
 
@@ -66,6 +66,8 @@ Cell outcomes are durable and reason-coded. A harness failure stops admission, d
 See [configuration](docs/configuration.md), [technical reference](docs/technical-reference.md), and the [schema documents](docs/schemas/manifest-v2.md).
 
 ## Evaluation results
+
+- [V13 saturation refresh and selection protocol](docs/evals/hard-cohort-v13-selection.md) — replaces six exact-ceiling scenarios output-blind; requires a separate one-sample paid selection pilot before confirmation.
 
 ### Hard cohort v10 — 2026-08-13
 

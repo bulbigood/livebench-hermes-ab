@@ -16,7 +16,7 @@ def test_default_config_is_strict_typed_and_ordered() -> None:
     assert config.execution.mode == "streaming"
     assert config.scoring.schema_version == 2
     assert config.generation.retry.retryable_codes == frozenset()
-    assert config.experiment_id == "livebench-hermes-hard-cohort-15x10-v12"
+    assert config.experiment_id == "livebench-hermes-hard-cohort-15x10-v13-selection"
     assert config.generation.samples_per_task == 10
     scenarios = [
         item
@@ -24,14 +24,15 @@ def test_default_config_is_strict_typed_and_ordered() -> None:
         for item in items
     ]
     assert len(scenarios) == 15
-    assert {item["family"] for item in scenarios} == {
-        "simplify",
+    assert len({item["id"] for item in scenarios}) == 15
+    families = {item["family"] for item in scenarios}
+    assert families == {
         "paraphrase",
-        "story_generation",
         "math_comp",
         "olympiad",
         "connections",
         "tablejoin",
+        "cta",
     }
     for arm in config.arms:
         preset = arm.hermes["moa"].get("presets", {}).get("default")

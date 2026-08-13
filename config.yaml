@@ -1,7 +1,7 @@
 # Harness settings are outside each arm. Every arms.<name>.hermes subtree is
 # copied verbatim to runs/<run>/homes/<name>/config.yaml. Never put secrets here.
 experiment:
-  id: livebench-hermes-hard-cohort-15x10-v12
+  id: livebench-hermes-hard-cohort-15x10-v13-selection
   upstream_commit: 00eae856aa1c1a9e9d058a65a9a94d85884034c4
   release: '2026-06-25'
   seed: 5615
@@ -12,17 +12,9 @@ selection:
   # Candidates were selected output-blind from records active in the pinned release.
   scenarios:
     instruction_following:
-    - id: 0503923535fbd8badfb2ccf38989b36a8ecaa2eda332a4b515bb13932421fecd
-      family: simplify
     - id: 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5
       family: paraphrase
-    - id: c0e4dc6b1c4cca07e408c5952ee4013a46a8663f0fc7684453ed5ce56b87e0c9
-      family: story_generation
     math:
-    - id: b241aac6ed7f653107d3c9bb1e5cad42495fcaf7dc530316c4fff751471a4d65
-      family: math_comp
-    - id: 504e4f0317a2bb481c7878ee625c1686135211da8df19744d2b78c9598f13761
-      family: math_comp
     - id: a84e6c888591b8182c32e6ed18291d6eaf9eee366fa818b014e9da41028f9576
       family: math_comp
     - id: 2dd75e080f3e276f3dcf304d970e6a03973ddf777537422c9aba59559ddc9594
@@ -31,12 +23,12 @@ selection:
       family: olympiad
     - id: e5b72d9cdb39c6e5f8798a557f119fff35d98fd165f55659e71bf6ac38b5f178
       family: olympiad
+    - id: 527d5f9f9cf27824b84109a495eeced7c7c097fb324b872212f6813a660e5ee4
+      family: olympiad
+    - id: 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536
+      family: olympiad
     language:
     - id: 27662d962f1e50ef82296d3b3e60ea96b719aee5d821f390beb1fd4af4e5385f
-      family: connections
-    - id: d1fa30fdaf510249ebfb000dbf2c8369b1eba32ad681d242a42965b861702aa2
-      family: connections
-    - id: 7327ff4cf4a089d1ef9959d6f4482b1238590f404e24f1fd48988965ec6e121b
       family: connections
     data_analysis:
     - id: d89584191190995d5cb7307c938dbfb201e3af17ed7f666c2afae0fe2ad55985
@@ -45,6 +37,14 @@ selection:
       family: tablejoin
     - id: 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300
       family: tablejoin
+    - id: 2e645a9a481f16ce14b5d069b62520852babd3b55383e00a75f675707088fddc
+      family: tablejoin
+    - id: 4d351c29bdddf5c41d59cd7bd1b70bb4d2ae2a071ada382d7690066b1cd7764c
+      family: tablejoin
+    - id: 58223a1f18c3cda82967cc3ba7d24813209e41470aee583167ee938ae01d3d21
+      family: cta
+    - id: d3d910189e70e5e5edd9a3f76420da1e8a5578b966ceef1c3936fb6b8e456551
+      family: cta
 generation:
   samples_per_task: 10
   retry:
