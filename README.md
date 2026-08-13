@@ -67,4 +67,4 @@ See [configuration](docs/configuration.md), [technical reference](docs/technical
 
 ## Evaluation results
 
-- [Latest evaluation: v13 selection cohort, 2026-08-13](docs/evals/results/2026-08-13-full-paid-v13-selection.md)
+- [Latest evaluation: v14 confirmatory cohort, 2026-08-13](docs/evals/results/2026-08-13-full-paid-v14-confirmatory.md)
