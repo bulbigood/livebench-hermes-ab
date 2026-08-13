@@ -1,6 +1,6 @@
 # LiveBench Hermes multi-arm harness
 
-This repository runs a frozen four-arm Hermes experiment using a typed, schema-versioned harness. The default matrix contains 15 scenarios, ten samples per scenario, and four arms: 600 cells and 900 provider calls. The current hard cohort replaces saturated pilot scenarios with output-blind selections from deterministic instruction-following, mathematics, language, and data-analysis families.
+This repository runs a frozen three-arm Hermes experiment using a typed, schema-versioned harness. The default matrix contains 15 scenarios, ten samples per scenario, and three arms: 450 cells and at most 600 provider calls. The active arms are `base`, `gpt_medium`, and `moa_mimo`; `moa_minimax` was removed after its reliability deficit in the v10 evaluation. The current hard cohort uses output-blind selections from deterministic instruction-following, mathematics, language, and data-analysis families.
 
 ## Safe default run
 
@@ -20,7 +20,7 @@ Only after the smoke run succeeds and the provider configuration has been checke
 uv run livebench-hermes-ab --full
 ```
 
-`--full` is deliberately explicit. For the current config it changes the run from 1 to 10 samples per scenario and from 60 to 600 cells. The configured model topology can make the provider-call count larger than the cell count.
+`--full` is deliberately explicit. For the current config it changes the run from 1 to 10 samples per scenario and from 45 to 450 cells. The configured MoA topology raises the maximum provider-call count to 600.
 
 ## Manual lifecycle
 
@@ -45,8 +45,8 @@ uv run livebench-hermes-ab --config config.yaml prepare \
 ```
 
 Samples and scheduling mode are frozen in `config.snapshot.yaml` and `manifest.json`. The default pipeline safely overrides `generation.samples_per_task` to one in its frozen snapshot; `--full` preserves the configured value. Worker count remains controlled by `execution.workers`. `auto` resolves to five workers per detected CPU with a hard maximum of 40. In `balanced_waves` mode,
-`execution.workers` must be an explicit multiple of the arm count. With four arms,
-8 workers run two complete arm waves concurrently; 7 workers fail before execution.
+`execution.workers` must be an explicit multiple of the arm count. With three arms,
+6 workers run two complete arm waves concurrently; 7 workers fail before execution.
 
 Execution and scoring are deliberately separate:
 
