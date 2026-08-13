@@ -38,8 +38,8 @@ def test_common_cohort_intersects_every_arm_and_report_preserves_order() -> None
     assert summary["samples_per_task"] == 1
     assert summary["statistical_analysis"]["sufficient_pilot_samples"] is False
     assert summary["statistical_analysis"]["arms"]["base"]["sample_variance"] is None
-    assert "WARNING: minimum common-valid samples per task is 1; fewer than 5" in report
-    assert "Recommended samples/task | Unavailable" in report
+    assert "WARNING: fewer than 5 common-valid samples per task" in report
+    assert "| 1 | 1 | Unavailable |" in report
 
 
 def test_report_includes_variance_confidence_interval_and_sample_recommendation() -> None:
@@ -78,11 +78,11 @@ def test_report_includes_variance_confidence_interval_and_sample_recommendation(
     assert base.recommended_samples_per_task >= 5
 
     report = render_markdown_report(result)
-    assert "## Statistical analysis" in report
-    assert "Sample variance" in report
+    assert "## Sampling" in report
+    assert "Sample variance" not in report
     assert "95% CI" in report
     assert "Recommended samples/task" in report
-    assert "Overall recommended samples/task:" in report
+    assert f"| 5 | 5 | {base.recommended_samples_per_task} |" in report
     assert "fewer than 5" not in report
 
     bundle = scoring_bundle(result, report)
@@ -159,13 +159,28 @@ def test_report_and_summary_include_per_scenario_and_family_percentiles() -> Non
     assert timing["scenarios"]["q1"]["arms"]["candidate"]["mean"] == 1.0
     assert timing["scenarios"]["q1"]["paired_deltas_vs_baseline"]["candidate"]["mean"] == 0.0
     assert timing["families"]["olympiad"]["arms"]["base"]["n"] == 4
-    assert "## Per-scenario statistics and percentiles" in report
-    assert "## Per-family statistics and percentiles" in report
-    assert "## Overall wall-time statistics" in report
-    assert "## Per-scenario wall-time statistics" in report
-    assert "## Per-family wall-time statistics" in report
-    assert "| q1 | math | olympiad | base |" in report
-    assert "| olympiad | 2 | candidate |" in report
+    assert "## Score by scenario" in report
+    assert "## Paired score deltas by scenario" in report
+    assert "## Score by family" in report
+    assert "## Paired score deltas by family" in report
+    assert "## Overall wall time" in report
+    assert "## Wall time by scenario" in report
+    assert "## Paired wall-time deltas by scenario" in report
+    assert "## Wall time by family" in report
+    assert "## Paired wall-time deltas by family" in report
+    assert "| Category | Family | Arm | n | Mean | Median | p95 | Scenario ID |" in report
+    assert "| math | olympiad | base | 2 | 0.5000 | 0.5000 | 0.9500 | q1 |" in report
+    assert "| olympiad | 2 | candidate | 4 |" in report
+    assert "Arm/paired delta" not in report
+    assert "Delta vs baseline" not in report
+    assert "| SD |" not in report
+    assert "p05" not in report
+    assert "p25" not in report
+    assert "p75" not in report
+    scenario_score = report.index("## Score by scenario")
+    scenario_delta = report.index("## Paired score deltas by scenario")
+    assert report.index("| math | olympiad | base |", scenario_score, scenario_delta) >= 0
+    assert "Δ candidate−base" not in report[scenario_score:scenario_delta]
 
 
 def test_scoring_revalidates_persisted_trace_evidence() -> None:

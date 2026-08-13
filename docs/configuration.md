@@ -44,11 +44,12 @@ operator's secret tooling.
 
 Legacy flat generation retries, alternate scheduling booleans, two-arm configuration, and missing scoring contracts are unsupported.
 
-The Markdown and JSON scoring reports include observation count, sample variance, standard
-deviation, standard error, confidence interval, pooled within-task variance, and a recommended
-`samples_per_task`. With fewer than five repeated samples per task, the report warns that the
-pilot is too small and does not estimate a required sample count. With five or more samples, the
-recommendation uses the observed pooled within-task variance and the configured confidence and
-margin. Zero or unavailable pilot variance uses a conservative variance bound for scores in
-`[0,1]`. The recommendation is an approximate pilot estimate, not a guarantee: it should be
-recomputed after a larger wave because future variance can differ from the pilot.
+The Markdown report is intentionally compact: distribution tables show `n`, mean, median, and
+p95, with absolute arm values separated from paired deltas. Detailed sample variance, standard
+deviation, standard error, confidence intervals, pooled within-task variance, and all percentiles
+remain available in `summary.json`. The Markdown sampling section retains the recommended
+`samples_per_task`; with fewer than five repeated samples per task it warns that the pilot is too
+small for a stable estimate. Recommendations use observed pooled within-task variance and the
+configured confidence and margin. Zero or unavailable pilot variance uses a conservative variance
+bound for scores in `[0,1]`. The estimate should be recomputed after a larger wave because future
+variance can differ from the pilot.
