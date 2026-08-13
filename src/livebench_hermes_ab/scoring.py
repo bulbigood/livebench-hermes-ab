@@ -40,6 +40,8 @@ class FrozenRun:
 class ScoreRow:
     pair_id: str
     question_id: str
+    category: str
+    family: str
     arm: str
     score: float
 
@@ -185,7 +187,7 @@ def score_run(run: FrozenRun, adapters: Mapping[str, ScoreAdapter]) -> ScoringRe
             outcome = valid[(arm, pair)]
             answer = _answer_text(outcome.answer_record)
             score = float(adapter(question.raw, answer))
-            rows.append(ScoreRow(pair, outcome.cell.question_id, arm, score))
+            rows.append(ScoreRow(pair, outcome.cell.question_id, question.category, question.task, arm, score))
             by_arm[arm].append(score)
     means = {arm: sum(by_arm[arm]) / len(by_arm[arm]) for arm in run.arm_order}
     comparisons = {
@@ -288,6 +290,78 @@ def _answer_text(record: Mapping[str, object]) -> str:
     raise IntegrityError("invalid answer record")
 
 
+def _percentile(values: list[float], probability: float) -> float:
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = probability * (len(ordered) - 1)
+    lower, upper = math.floor(position), math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _distribution(values: list[float]) -> dict[str, object]:
+    if not values:
+        raise IntegrityError("cannot summarize an empty score distribution")
+    return {
+        "n": len(values),
+        "mean": statistics.fmean(values),
+        "sample_standard_deviation": statistics.stdev(values) if len(values) >= 2 else None,
+        "percentiles": {
+            name: _percentile(values, probability)
+            for name, probability in (
+                ("p05", 0.05), ("p25", 0.25), ("p50", 0.50),
+                ("p75", 0.75), ("p95", 0.95),
+            )
+        },
+    }
+
+
+def grouped_statistics(result: ScoringResult) -> dict[str, object]:
+    baseline = result.baseline_arm
+    scenarios: dict[str, object] = {}
+    families: dict[str, object] = {}
+    for question_id in sorted({row.question_id for row in result.rows}):
+        rows = [row for row in result.rows if row.question_id == question_id]
+        baseline_by_pair = {row.pair_id: row.score for row in rows if row.arm == baseline}
+        scenarios[question_id] = {
+            "category": rows[0].category,
+            "family": rows[0].family,
+            "arms": {
+                arm: _distribution([row.score for row in rows if row.arm == arm])
+                for arm in result.arm_order
+            },
+            "paired_deltas_vs_baseline": {
+                arm: _distribution([
+                    row.score - baseline_by_pair[row.pair_id]
+                    for row in rows if row.arm == arm
+                ])
+                for arm in result.arm_order if arm != baseline
+            },
+        }
+    for family in sorted({row.family for row in result.rows}):
+        rows = [row for row in result.rows if row.family == family]
+        baseline_by_pair = {row.pair_id: row.score for row in rows if row.arm == baseline}
+        families[family] = {
+            "categories": sorted({row.category for row in rows}),
+            "scenario_count": len({row.question_id for row in rows}),
+            "arms": {
+                arm: _distribution([row.score for row in rows if row.arm == arm])
+                for arm in result.arm_order
+            },
+            "paired_deltas_vs_baseline": {
+                arm: _distribution([
+                    row.score - baseline_by_pair[row.pair_id]
+                    for row in rows if row.arm == arm
+                ])
+                for arm in result.arm_order if arm != baseline
+            },
+        }
+    return {"scenarios": scenarios, "families": families}
+
+
 def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
     statistics_value = {
         arm: {
@@ -330,9 +404,11 @@ def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
             "recommended_samples_per_task": max(recommendations) if recommendations else None,
             "arms": statistics_value,
         },
+        "grouped_statistics": grouped_statistics(result),
     }
     scores = [
-        {"pair_id": row.pair_id, "question_id": row.question_id, "arm": row.arm, "score": row.score}
+        {"pair_id": row.pair_id, "question_id": row.question_id, "category": row.category,
+         "family": row.family, "arm": row.arm, "score": row.score}
         for row in result.rows
     ]
     encode = lambda value: (

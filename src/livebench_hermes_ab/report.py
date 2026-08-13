@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .scoring import ScoringResult
+from .scoring import ScoringResult, grouped_statistics
 
 
 def _statistic(value: float | None) -> str:
@@ -92,6 +92,44 @@ def _trace_audit(result: ScoringResult) -> list[str]:
     ]
 
 
+def _distribution_cells(value: dict[str, object]) -> str:
+    percentiles = value["percentiles"]
+    assert isinstance(percentiles, dict)
+    deviation = value["sample_standard_deviation"]
+    values = [str(value["n"]), f"{float(value['mean']):.4f}", "—" if deviation is None else f"{float(deviation):.4f}"]
+    values.extend(f"{float(percentiles[key]):.4f}" for key in ("p05", "p25", "p50", "p75", "p95"))
+    return " | ".join(values)
+
+
+def _grouped_statistics(result: ScoringResult) -> list[str]:
+    grouped = grouped_statistics(result)
+    scenarios, families = grouped["scenarios"], grouped["families"]
+    assert isinstance(scenarios, dict) and isinstance(families, dict)
+    lines = [
+        "", "## Per-scenario statistics and percentiles", "",
+        "| Scenario | Category | Family | Arm/paired delta | n | Mean | SD | p05 | p25 | p50 | p75 | p95 |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for question_id, item in scenarios.items():
+        assert isinstance(item, dict)
+        for arm in result.arm_order:
+            lines.append(f"| {question_id} | {item['category']} | {item['family']} | {arm} | {_distribution_cells(item['arms'][arm])} |")
+        for arm, distribution in item["paired_deltas_vs_baseline"].items():
+            lines.append(f"| {question_id} | {item['category']} | {item['family']} | Δ {arm}−{result.baseline_arm} | {_distribution_cells(distribution)} |")
+    lines.extend([
+        "", "## Per-family statistics and percentiles", "",
+        "| Family | Scenarios | Arm/paired delta | n | Mean | SD | p05 | p25 | p50 | p75 | p95 |",
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ])
+    for family, item in families.items():
+        assert isinstance(item, dict)
+        for arm in result.arm_order:
+            lines.append(f"| {family} | {item['scenario_count']} | {arm} | {_distribution_cells(item['arms'][arm])} |")
+        for arm, distribution in item["paired_deltas_vs_baseline"].items():
+            lines.append(f"| {family} | {item['scenario_count']} | Δ {arm}−{result.baseline_arm} | {_distribution_cells(distribution)} |")
+    return lines
+
+
 def render_markdown_report(result: ScoringResult) -> str:
     lines = [
         "# LiveBench Hermes experiment",
@@ -108,5 +146,6 @@ def render_markdown_report(result: ScoringResult) -> str:
         lines.extend(["", "## Exclusions", ""])
         lines.extend(f"- {code}: {count}" for code, count in result.exclusion_counts.items())
     lines.extend(_statistical_analysis(result))
+    lines.extend(_grouped_statistics(result))
     lines.extend(_trace_audit(result))
     return "\n".join(lines) + "\n"

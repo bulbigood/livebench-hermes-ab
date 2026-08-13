@@ -93,6 +93,61 @@ def test_report_includes_variance_confidence_interval_and_sample_recommendation(
     assert summary["statistical_analysis"]["recommended_samples_per_task"] is not None
 
 
+def test_report_and_summary_include_per_scenario_and_family_percentiles() -> None:
+    arms = ("base", "candidate")
+    outcomes = []
+    questions = {
+        "q1": QuestionEvidence("math", "olympiad", {}),
+        "q2": QuestionEvidence("math", "olympiad", {}),
+        "q3": QuestionEvidence("data_analysis", "cta", {}),
+    }
+    scores = {
+        "q1": {"base": (0.0, 1.0), "candidate": (0.5, 1.0)},
+        "q2": {"base": (0.2, 0.4), "candidate": (0.3, 0.9)},
+        "q3": {"base": (0.0, 0.0), "candidate": (0.0, 0.2)},
+    }
+    pairs = []
+    for question_id, arm_values in scores.items():
+        for sample_index in (1, 2):
+            pair = f"{question_id}-s{sample_index}"
+            pairs.append(pair)
+            for arm in arms:
+                outcomes.append(
+                    ValidOutcome(
+                        CellId(arm, pair, question_id, sample_index),
+                        {"answer": str(arm_values[arm][sample_index - 1])},
+                        1.0,
+                    )
+                )
+    run = FrozenRun(arms, "base", tuple(pairs), tuple(outcomes), questions, samples_per_task=2)
+    result = score_run(
+        run,
+        {task: lambda _q, answer: float(answer) for task in ("olympiad", "cta")},
+    )
+    report = render_markdown_report(result)
+    bundle = scoring_bundle(result, report)
+    summary = json.loads(bundle.files[next(p for p in bundle.files if p.name == "summary.json")])
+
+    scenario = summary["grouped_statistics"]["scenarios"]["q1"]
+    assert scenario["category"] == "math"
+    assert scenario["family"] == "olympiad"
+    assert scenario["arms"]["base"] == {
+        "n": 2,
+        "mean": 0.5,
+        "sample_standard_deviation": 2**-0.5,
+        "percentiles": {"p05": 0.05, "p25": 0.25, "p50": 0.5, "p75": 0.75, "p95": 0.95},
+    }
+    assert scenario["paired_deltas_vs_baseline"]["candidate"]["percentiles"]["p50"] == 0.25
+    family = summary["grouped_statistics"]["families"]["olympiad"]
+    assert family["scenario_count"] == 2
+    assert family["arms"]["candidate"]["n"] == 4
+    assert family["arms"]["candidate"]["percentiles"]["p95"] == 0.985
+    assert "## Per-scenario statistics and percentiles" in report
+    assert "## Per-family statistics and percentiles" in report
+    assert "| q1 | math | olympiad | base |" in report
+    assert "| olympiad | 2 | candidate |" in report
+
+
 def test_scoring_revalidates_persisted_trace_evidence() -> None:
     import json
 
