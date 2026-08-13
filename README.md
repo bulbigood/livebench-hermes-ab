@@ -1,6 +1,6 @@
 # LiveBench Hermes multi-arm harness
 
-This repository runs a frozen two-arm Hermes experiment using a typed, schema-versioned harness. The full matrix contains 15 scenarios, 20 samples per scenario, and two arms: 600 cells and at most 900 provider calls. The active arms are `base` and `moa_mimo`. The v14 confirmatory cohort replaces floor- and ceiling-saturated scenarios using a separately scored one-sample selection pilot.
+This repository runs a frozen two-arm Hermes experiment using a typed, schema-versioned harness. The full matrix contains 15 scenarios, 20 samples per scenario, and two arms: 600 cells and at most 900 provider calls. The active arms are `base` and `moa_mimo`. The v14 confirmatory cohort uses a separately scored one-sample selection pilot and retains one CTA scenario as an explicit floor/identifiability control.
 
 ## Safe default run
 

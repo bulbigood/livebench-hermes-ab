@@ -31,6 +31,7 @@ def test_default_config_is_strict_typed_and_ordered() -> None:
         "math_comp",
         "olympiad",
         "tablejoin",
+        "cta",
     }
     for arm in config.arms:
         preset = arm.hermes["moa"].get("presets", {}).get("default")

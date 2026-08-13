@@ -38,8 +38,8 @@ selection:
       family: tablejoin
     - id: 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300
       family: tablejoin
-    - id: 2e645a9a481f16ce14b5d069b62520852babd3b55383e00a75f675707088fddc
-      family: tablejoin
+    - id: d3d910189e70e5e5edd9a3f76420da1e8a5578b966ceef1c3936fb6b8e456551
+      family: cta
     - id: 4d351c29bdddf5c41d59cd7bd1b70bb4d2ae2a071ada382d7690066b1cd7764c
       family: tablejoin
     - id: d4b2efd567053821eedf1ea3f759d4948f50264b94bd6ff37b18bc92e79d4fc1

@@ -4,13 +4,15 @@ V14 is frozen for a future full paid comparison of `base` and `moa_mimo`. The fu
 
 ## Selection boundary
 
-The completed v13 run was treated as selection evidence. Three unusable scenarios were removed:
+The completed v13 run was treated as selection evidence. Two unusable scenarios and one near-saturated scenario were removed:
 
 - `58223a1f` (`cta`): exact floor, 0.0 for both arms;
-- `d3d91018` (`cta`): near floor, 0.2 for `base` and 0.0 for `moa_mimo`;
 - `27662d96` (`connections`): exact ceiling, 1.0 for both arms.
+- `2e645a9a` (`tablejoin`): near ceiling, 0.957 for `base` and 0.943 for `moa_mimo`.
 
-Candidate eligibility was frozen before inference: active in release `2026-06-25`, supported by a deterministic scorer, no CTA or connections tasks, and structural headroom within `olympiad` or `tablejoin`. Six candidates were evaluated in a separate one-sample paid pilot: 12 cells and at most 18 provider calls.
+`d3d91018` remains as a deliberately retained CTA control. Its v13 result was near floor (0.2 for `base`, 0.0 for `moa_mimo`), so it is an identifiability/floor sentinel rather than a primary discriminative scenario. It must not be presented as evidence that CTA contributes useful positive separation.
+
+Replacement-candidate eligibility was frozen before inference: active in release `2026-06-25`, supported by a deterministic scorer, no CTA or connections replacement tasks, and structural headroom within `olympiad` or `tablejoin`. Six candidates were evaluated in a separate one-sample paid pilot: 12 cells and at most 18 provider calls. The retained CTA is a control requested after candidate selection and is explicitly excluded from the replacement-quality claim.
 
 ## Pilot results
 
