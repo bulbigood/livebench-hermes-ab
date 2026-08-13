@@ -34,6 +34,8 @@ def test_no_network_fake_hermes_prepare_run_score(tmp_path: Path, monkeypatch) -
                 "task": "exact_match",
                 "turns": ["Return exactly: offline-answer"],
                 "ground_truth": "offline-answer",
+                "livebench_release_date": "fixture",
+                "livebench_removal_date": "",
             }
         )
         + "\n"
@@ -46,7 +48,7 @@ def test_no_network_fake_hermes_prepare_run_score(tmp_path: Path, monkeypatch) -
     executable = tmp_path / "fake-hermes"
     executable.write_text(
         "#!/bin/sh\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'Hermes Agent v0.19.1'; exit 0; fi\n"
+        'if [ "$1" = "--version" ]; then echo \'Hermes Agent v0.19.1\'; exit 0; fi\n'
         "printf '%s\\n' 'offline-answer'\n"
     )
     executable.chmod(0o755)
@@ -62,9 +64,7 @@ def test_no_network_fake_hermes_prepare_run_score(tmp_path: Path, monkeypatch) -
                     "question_globs": ["data/*.jsonl"],
                 },
                 "selection": {
-                    "scenarios": {
-                        "reasoning": [{"id": question_id, "family": "exact_match"}]
-                    }
+                    "scenarios": {"reasoning": [{"id": question_id, "family": "exact_match"}]}
                 },
                 "generation": {
                     "samples_per_task": 1,

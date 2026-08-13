@@ -153,7 +153,9 @@ def prepare_run(
     credentials_file: Path | None = None,
 ) -> RunManifest:
     provenance = verify_upstream_revision(root, config.upstream_commit)
-    selected = select_questions(discover_questions(root, config.question_globs), config.selection)
+    selected = select_questions(
+        discover_questions(root, config.question_globs), config.selection, config.release
+    )
     workload = build_workload(
         selected, config.arms, config.generation.samples_per_task, config.seed
     )

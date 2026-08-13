@@ -28,7 +28,9 @@ class WorkloadPlan:
     expected_provider_calls: int
 
 
-def select_questions(catalog: Sequence[Question], config: SelectionConfig) -> tuple[Question, ...]:
+def select_questions(
+    catalog: Sequence[Question], config: SelectionConfig, release: str
+) -> tuple[Question, ...]:
     by_id = {question.question_id: question for question in catalog}
     selected = []
     for category, specs in config.scenarios.items():
@@ -38,6 +40,12 @@ def select_questions(catalog: Sequence[Question], config: SelectionConfig) -> tu
                 raise ConfigError(f"selected scenario unavailable: {spec['id']}")
             if question.category != category or question.family != spec["family"]:
                 raise ConfigError(f"selected scenario metadata mismatch: {spec['id']}")
+            released = str(question.raw.get("livebench_release_date", ""))
+            removed = str(question.raw.get("livebench_removal_date", ""))
+            if not released or released > release or (removed and removed <= release):
+                raise ConfigError(
+                    f"selected scenario not active for release {release}: {spec['id']}"
+                )
             selected.append(question)
     if len({q.question_id for q in selected}) != len(selected):
         raise ConfigError("selection contains duplicate scenario IDs")

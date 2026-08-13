@@ -1,7 +1,7 @@
 # Harness settings are outside each arm. Every arms.<name>.hermes subtree is
 # copied verbatim to runs/<run>/homes/<name>/config.yaml. Never put secrets here.
 experiment:
-  id: livebench-hermes-targeted-moa-15x5-v7
+  id: livebench-hermes-targeted-moa-15x5-v8
   upstream_commit: 00eae856aa1c1a9e9d058a65a9a94d85884034c4
   release: '2026-06-25'
   seed: 5615
@@ -12,19 +12,20 @@ selection:
   # `id` selects a pinned LiveBench record; `family` is a checked assertion.
   scenarios:
     instruction_following:
-    - id: 1a06f223c7988766f6c876404f04df808915b4bb08d1fca784eadec17e502973
+    - id: 3bde3f0d0cc7481da49d15758f8c32dbfff6eb2184c2cbd3fbbd15665ec8102d
       family: summarize
     - id: 469c2a921e910fce7859e4c351f41c9a4cda6b028386904aa22afa09cbba5351
       family: summarize
-    - id: 0503923535fbd8badfb2ccf38989b36a8ecaa2eda332a4b515bb13932421fecd
+    - id: 77b0d92b8c174846eb6e247732cf556425226986a552b208ec107a5e8faeaba8
       family: simplify
     - id: a365e843fd014371b5de486fb1f161db1a3497dd3338268d33d5569f5f4d7185
       family: paraphrase
-    - id: c0e4dc6b1c4cca07e408c5952ee4013a46a8663f0fc7684453ed5ce56b87e0c9
+    - id: dbf2644a22244d678a05dab31e931414656027ac2b4ca9095efc1ebf0903048d
       family: story_generation
     reasoning:
-    - id: d968c11d5c594e036b8cdcb02bfd1e3251d48d1b21d8a6f9ab86eb6926ac50f8
-      family: spatial
+    - id: bd14ba82d1fe813dcdf6c16f0f868e5f3fe92e4cee9cf5eb3fd5cb6f03d68517
+      family: zebra_puzzle
+      note: level 15; short 1211-character prompt
     - id: c833574b0ff6e8609bee19b36fabc48501cdcd9a64b99cd0422f54ada1acc53d
       family: zebra_puzzle
       note: level 20
@@ -40,8 +41,8 @@ selection:
     data_analysis:
     - id: dc753a46614f7f4d1c839d06ec864324f8b6142e30bf804dae6aae8b6eb91941
       family: tablejoin
-    - id: bfe58cf09204ef9dddeb7358323fbab09c078fbc88d022c2387e0eada4470849
-      family: tablereformat
+    - id: 2f1500d37ffd0e42cd2c89c04011cbbf5dd6b1f71f495156b016a967270cdded
+      family: tablejoin
     - id: bd4b2031ad50538f365ac3312534d813fb7326fd90cf5056ac80b31d189cbb15
       family: tablejoin
     - id: a215b90180b104679133c979614fe0feeb770b6a3d1df4d41065e15be2ed7051

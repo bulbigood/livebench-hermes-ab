@@ -4,8 +4,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from livebench_hermes_ab.config import load_config
-from livebench_hermes_ab.domain import IntegrityError, ManifestError, UnsupportedSchemaVersion
+from livebench_hermes_ab.config import SelectionConfig, load_config
+from livebench_hermes_ab.domain import (
+    ConfigError,
+    IntegrityError,
+    ManifestError,
+    UnsupportedSchemaVersion,
+)
 from livebench_hermes_ab.manifest import (
     CompatibilityResult,
     Provenance,
@@ -14,7 +19,7 @@ from livebench_hermes_ab.manifest import (
     serialize_manifest,
     verify_frozen_artifacts,
 )
-from livebench_hermes_ab.workload import Question, build_workload
+from livebench_hermes_ab.workload import Question, build_workload, select_questions
 
 
 def _plain(value):
@@ -50,6 +55,34 @@ def test_workload_and_manifest_are_ordered_and_versioned() -> None:
 def test_old_manifest_fails_closed() -> None:
     with pytest.raises(UnsupportedSchemaVersion, match="schema version 2"):
         parse_manifest({"manifest_schema_version": 1})
+
+
+def test_selection_rejects_question_released_after_experiment() -> None:
+    question = Question(
+        "q",
+        "reasoning",
+        "spatial",
+        ("prompt",),
+        {"livebench_release_date": "2026-07-01", "livebench_removal_date": ""},
+    )
+    config = SelectionConfig({"reasoning": ({"id": "q", "family": "spatial"},)})
+
+    with pytest.raises(ConfigError, match="not active for release 2026-06-25"):
+        select_questions((question,), config, "2026-06-25")
+
+
+def test_selection_rejects_question_removed_on_experiment_release() -> None:
+    question = Question(
+        "q",
+        "reasoning",
+        "spatial",
+        ("prompt",),
+        {"livebench_release_date": "2025-01-01", "livebench_removal_date": "2026-06-25"},
+    )
+    config = SelectionConfig({"reasoning": ({"id": "q", "family": "spatial"},)})
+
+    with pytest.raises(ConfigError, match="not active for release 2026-06-25"):
+        select_questions((question,), config, "2026-06-25")
 
 
 def test_manifest_rejects_invalid_matrix_and_frozen_artifact_drift(tmp_path: Path) -> None:
