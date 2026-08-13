@@ -57,6 +57,14 @@ def _cell_value(cell: CellId) -> dict[str, object]:
     }
 
 
+def _plain_json_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _plain_json_value(child) for key, child in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_plain_json_value(child) for child in value]
+    return value
+
+
 def serialize_cell_outcome(value: CellOutcome) -> bytes:
     data: dict[str, object] = {
         "cell_journal_schema_version": 2,
@@ -64,7 +72,7 @@ def serialize_cell_outcome(value: CellOutcome) -> bytes:
         "elapsed_seconds": value.elapsed_seconds,
     }
     if isinstance(value, ValidOutcome):
-        data.update({"status": "valid", "answer_record": dict(value.answer_record)})
+        data.update({"status": "valid", "answer_record": _plain_json_value(value.answer_record)})
     else:
         data.update({"status": "excluded", "code": value.code.value, "reason": value.reason})
     return (

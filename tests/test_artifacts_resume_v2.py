@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -25,6 +26,28 @@ def test_cell_schema_round_trip_and_old_schema_rejected() -> None:
     assert parse_cell_outcome_bytes(serialize_cell_outcome(outcome)) == outcome
     with pytest.raises(UnsupportedSchemaVersion):
         parse_cell_outcome_bytes(b'{"cell_journal_schema_version":1}')
+
+
+def test_cell_schema_serializes_deeply_immutable_evidence() -> None:
+    outcome = ValidOutcome(
+        CellId("base", "pair", "q", 1),
+        MappingProxyType(
+            {
+                "answer": "yes",
+                "trace_audit": (
+                    MappingProxyType({"references": (("provider", "model"),)}),
+                ),
+            }
+        ),
+        2.0,
+    )
+
+    value = json.loads(serialize_cell_outcome(outcome))
+
+    assert value["answer_record"] == {
+        "answer": "yes",
+        "trace_audit": [{"references": [["provider", "model"]]}],
+    }
 
 
 def test_retry_plan_preserves_authoritative_outcome_until_promotion(tmp_path: Path) -> None:

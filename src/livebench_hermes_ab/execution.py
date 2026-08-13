@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -30,11 +31,44 @@ class CellRunResult:
     diagnostic: AttemptDiagnostic | None = None
 
 
+_SENSITIVE_DIAGNOSTIC_KEYS = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "credential",
+    "credentials",
+    "password",
+    "secret",
+    "token",
+}
+
+
+def _redact_diagnostic_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                "[REDACTED]"
+                if str(key).strip().lower().replace("-", "_") in _SENSITIVE_DIAGNOSTIC_KEYS
+                else _redact_diagnostic_value(child)
+            )
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_diagnostic_value(child) for child in value]
+    return value
+
+
 def _trace_diagnostic(trace: bytes) -> AttemptDiagnostic:
     try:
-        return AttemptDiagnostic("moa_trace", "utf-8", trace.decode("utf-8"))
+        text = trace.decode("utf-8")
     except UnicodeDecodeError:
         return AttemptDiagnostic("moa_trace", "base64", base64.b64encode(trace).decode("ascii"))
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return AttemptDiagnostic("moa_trace", "utf-8", text)
+    sanitized = json.dumps(_redact_diagnostic_value(value), ensure_ascii=False) + "\n"
+    return AttemptDiagnostic("moa_trace", "utf-8", sanitized)
 
 
 class CellRunner:

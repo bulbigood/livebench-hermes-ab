@@ -126,3 +126,41 @@ def test_non_utf8_moa_trace_is_excluded_and_preserved_as_base64(tmp_path: Path) 
         "encoding": "base64",
         "content": "//4=",
     }
+
+
+def test_invalid_trace_diagnostic_redacts_secret_fields(tmp_path: Path) -> None:
+    cell = CellSpec(CellId("moa", "p", "q", 1), "prompt", "moa", 2)
+    trace = (
+        json.dumps(
+            {
+                "api_key": "top-secret",
+                "nested": {"Authorization": "Bearer private", "safe": "kept"},
+            }
+        ).encode()
+        + b"\n"
+    )
+
+    class TraceRunner:
+        def invoke(self, request: HermesRequest) -> HermesResult:
+            return HermesResult(0, "answer", "", 0.5, trace)
+
+    class TraceWorkspace(FakeWorkspace):
+        expected_trace = ExpectedTrace(
+            cell.id, "default", (("openrouter", "ref"),), ("openai", "agg")
+        )
+
+    store = FilesystemArtifactStore(tmp_path / "run")
+    ExecutionService(
+        Scheduler(1),
+        CellRunner(TraceRunner(), lambda _cell: TraceWorkspace(tmp_path / "workspace")),
+        store,
+    ).execute((cell,))
+
+    attempt = json.loads(next((tmp_path / "run" / "attempts").glob("*.json")).read_text())
+    diagnostic = json.loads(attempt["diagnostic"]["content"])
+    assert diagnostic == {
+        "api_key": "[REDACTED]",
+        "nested": {"Authorization": "[REDACTED]", "safe": "kept"},
+    }
+    assert "top-secret" not in attempt["diagnostic"]["content"]
+    assert "Bearer private" not in attempt["diagnostic"]["content"]
