@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from .scoring import ScoringResult, grouped_statistics, timing_statistics
+from .scoring import (
+    ScoringResult,
+    grouped_statistics,
+    paired_decision_analysis,
+    timing_statistics,
+)
 
 
 def _statistic(value: float | None) -> str:
@@ -75,6 +80,38 @@ def _statistical_analysis(result: ScoringResult) -> list[str]:
                     "[0,1] score-range bound."
                 ),
             ]
+        )
+    return lines
+
+
+def _paired_decision_analysis(result: ScoringResult) -> list[str]:
+    analysis = paired_decision_analysis(result)
+    comparisons = analysis["comparisons"]
+    assert isinstance(comparisons, dict)
+    lines = [
+        "",
+        "## Paired better/worse decision analysis",
+        "",
+        "The verdict uses a two-sided 95% confidence interval for common-valid paired score differences. Sample projections assume the observed effect and paired-difference variance persist; they are planning estimates, not guarantees.",
+        "",
+        "| Candidate vs baseline | n | Mean delta | SD | 95% CI | Verdict | Projected CI-excluding-zero samples/scenario | 95% power samples/scenario |",
+        "|---|---:|---:|---:|---:|---|---:|---:|",
+    ]
+    for arm, item in comparisons.items():
+        assert isinstance(item, dict)
+        interval = item["confidence_interval"]
+        rendered_interval = (
+            "Unavailable" if interval is None
+            else f"[{float(interval[0]):.4f}, {float(interval[1]):.4f}]"
+        )
+        projected = item["required_samples_per_scenario_for_projected_ci_excluding_zero"]
+        powered = item["required_samples_per_scenario_for_95_percent_power"]
+        lines.append(
+            f"| {arm} vs {result.baseline_arm} | {item['observations']} | "
+            f"{float(item['observed_mean_delta']):.4f} | {_statistic(item['sample_standard_deviation'])} | "
+            f"{rendered_interval} | {item['verdict']} | "
+            f"{'Unavailable' if projected is None else projected} | "
+            f"{'Unavailable' if powered is None else powered} |"
         )
     return lines
 
@@ -195,6 +232,7 @@ def render_markdown_report(result: ScoringResult) -> str:
         lines.extend(["", "## Exclusions", ""])
         lines.extend(f"- {code}: {count}" for code, count in result.exclusion_counts.items())
     lines.extend(_statistical_analysis(result))
+    lines.extend(_paired_decision_analysis(result))
     lines.extend(_grouped_statistics(result))
     lines.extend(_timing_statistics(result))
     lines.extend(_trace_audit(result))

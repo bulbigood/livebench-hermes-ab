@@ -47,7 +47,7 @@ def test_report_includes_variance_confidence_interval_and_sample_recommendation(
     outcomes = []
     values = {
         "base": (0.0, 0.5, 1.0, 0.5, 1.0),
-        "candidate": (0.5, 1.0, 1.0, 0.5, 0.0),
+        "candidate": (0.5, 1.0, 1.0, 0.5, 0.5),
     }
     for sample_index in range(1, 6):
         pair = f"q1-s{sample_index}"
@@ -91,6 +91,16 @@ def test_report_includes_variance_confidence_interval_and_sample_recommendation(
     assert summary["statistical_analysis"]["target_margin_of_error"] == 0.05
     assert summary["statistical_analysis"]["arms"]["base"]["sample_variance"] == 0.175
     assert summary["statistical_analysis"]["recommended_samples_per_task"] is not None
+    decision = summary["paired_decision_analysis"]["comparisons"]["candidate"]
+    assert decision["confidence_level"] == 0.95
+    assert decision["power"] == 0.95
+    assert decision["verdict"] == "inconclusive"
+    assert decision["required_total_pairs_for_projected_ci_excluding_zero"] is not None
+    assert decision["required_samples_per_scenario_for_projected_ci_excluding_zero"] is not None
+    assert decision["required_total_pairs_for_95_percent_power"] is not None
+    assert decision["required_samples_per_scenario_for_95_percent_power"] is not None
+    assert "## Paired better/worse decision analysis" in report
+    assert "95% power samples/scenario" in report
 
 
 def test_report_and_summary_include_per_scenario_and_family_percentiles() -> None:

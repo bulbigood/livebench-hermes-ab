@@ -429,6 +429,68 @@ def timing_statistics(result: ScoringResult) -> dict[str, object]:
     }
 
 
+def paired_decision_analysis(result: ScoringResult) -> dict[str, object]:
+    confidence_level = 0.95
+    power = 0.95
+    alpha = 1.0 - confidence_level
+    z_alpha = statistics.NormalDist().inv_cdf(1.0 - alpha / 2.0)
+    z_power = statistics.NormalDist().inv_cdf(power)
+    baseline = result.baseline_arm
+    task_count = len({row.question_id for row in result.rows})
+    baseline_by_pair = {
+        row.pair_id: row.score for row in result.rows if row.arm == baseline
+    }
+    comparisons: dict[str, object] = {}
+    for arm in result.arm_order:
+        if arm == baseline:
+            continue
+        differences = [
+            row.score - baseline_by_pair[row.pair_id]
+            for row in result.rows if row.arm == arm
+        ]
+        observations = len(differences)
+        mean = statistics.fmean(differences)
+        deviation = statistics.stdev(differences) if observations >= 2 else None
+        standard_error = deviation / math.sqrt(observations) if deviation is not None else None
+        interval = (
+            [mean - z_alpha * standard_error, mean + z_alpha * standard_error]
+            if standard_error is not None else None
+        )
+        verdict = (
+            "unavailable" if interval is None else
+            "better" if interval[0] > 0 else
+            "worse" if interval[1] < 0 else "inconclusive"
+        )
+        projected_pairs = power_pairs = None
+        if deviation is not None and mean != 0:
+            projected_pairs = max(2, math.ceil((z_alpha * deviation / abs(mean)) ** 2))
+            power_pairs = max(2, math.ceil(((z_alpha + z_power) * deviation / abs(mean)) ** 2))
+        comparisons[arm] = {
+            "confidence_level": confidence_level,
+            "power": power,
+            "two_sided_alpha": alpha,
+            "observations": observations,
+            "observed_mean_delta": mean,
+            "sample_standard_deviation": deviation,
+            "standard_error": standard_error,
+            "confidence_interval": interval,
+            "verdict": verdict,
+            "required_total_pairs_for_projected_ci_excluding_zero": projected_pairs,
+            "required_samples_per_scenario_for_projected_ci_excluding_zero": (
+                math.ceil(projected_pairs / task_count) if projected_pairs is not None else None
+            ),
+            "required_total_pairs_for_95_percent_power": power_pairs,
+            "required_samples_per_scenario_for_95_percent_power": (
+                math.ceil(power_pairs / task_count) if power_pairs is not None else None
+            ),
+        }
+    return {
+        "method": "normal_approximation_on_common_valid_paired_differences",
+        "assumption": "future effect size and paired-difference variance match this run",
+        "comparisons": comparisons,
+    }
+
+
 def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
     statistics_value = {
         arm: {
@@ -473,6 +535,7 @@ def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
         },
         "grouped_statistics": grouped_statistics(result),
         "timing_statistics": timing_statistics(result),
+        "paired_decision_analysis": paired_decision_analysis(result),
     }
     scores = [
         {"pair_id": row.pair_id, "question_id": row.question_id, "category": row.category,
