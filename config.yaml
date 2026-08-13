@@ -1,7 +1,7 @@
 # Harness settings are outside each arm. Every arms.<name>.hermes subtree is
 # copied verbatim to runs/<run>/homes/<name>/config.yaml. Never put secrets here.
 experiment:
-  id: livebench-hermes-confirmatory-15x20-v14
+  id: livebench-hermes-production-15x10-v15
   upstream_commit: 00eae856aa1c1a9e9d058a65a9a94d85884034c4
   release: '2026-06-25'
   seed: 5615
@@ -45,7 +45,7 @@ selection:
     - id: d4b2efd567053821eedf1ea3f759d4948f50264b94bd6ff37b18bc92e79d4fc1
       family: tablejoin
 generation:
-  samples_per_task: 20
+  samples_per_task: 10
   retry:
     max_attempts: 2
     retryable_codes: []

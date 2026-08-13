@@ -16,8 +16,8 @@ def test_default_config_is_strict_typed_and_ordered() -> None:
     assert config.execution.mode == "streaming"
     assert config.scoring.schema_version == 2
     assert config.generation.retry.retryable_codes == frozenset()
-    assert config.experiment_id == "livebench-hermes-confirmatory-15x20-v14"
-    assert config.generation.samples_per_task == 20
+    assert config.experiment_id == "livebench-hermes-production-15x10-v15"
+    assert config.generation.samples_per_task == 10
     scenarios = [
         item
         for items in config.selection.scenarios.values()

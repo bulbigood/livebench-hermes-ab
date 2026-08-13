@@ -11,11 +11,11 @@ def test_pipeline_config_defaults_to_one_sample_without_mutating_source() -> Non
     assert config.generation.samples_per_task == 1
     assert temporary is not None
     assert yaml.safe_load(temporary.read_text())["generation"]["samples_per_task"] == 1
-    assert yaml.safe_load(source.read_text())["generation"]["samples_per_task"] == 20
+    assert yaml.safe_load(source.read_text())["generation"]["samples_per_task"] == 10
     temporary.unlink()
 
     full, temporary = _pipeline_config(source, full=True)
-    assert full.generation.samples_per_task == 20
+    assert full.generation.samples_per_task == 10
     assert temporary is None
 
 

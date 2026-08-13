@@ -41,8 +41,8 @@ def test_workload_and_manifest_are_ordered_and_versioned() -> None:
     workload = build_workload(
         questions, config.arms, config.generation.samples_per_task, config.seed
     )
-    assert len(workload.cells) == 600
-    assert workload.expected_provider_calls == 900
+    assert len(workload.cells) == 300
+    assert workload.expected_provider_calls == 450
     manifest = build_manifest(
         config,
         workload,

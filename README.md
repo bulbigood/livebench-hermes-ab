@@ -1,6 +1,6 @@
 # LiveBench Hermes multi-arm harness
 
-This repository runs a frozen two-arm Hermes experiment using a typed, schema-versioned harness. The full matrix contains 15 scenarios, 20 samples per scenario, and two arms: 600 cells and at most 900 provider calls. The active arms are `base` and `moa_mimo`. The v14 confirmatory cohort uses a separately scored one-sample selection pilot and retains one CTA scenario as an explicit floor/identifiability control.
+This repository runs a frozen two-arm Hermes experiment using a typed, schema-versioned harness. The production default contains 15 scenarios, 10 samples per scenario, and two arms: 300 cells and at most 450 provider calls. The active arms are `base` and `moa_mimo`. The cohort uses a separately scored one-sample selection pilot and retains one CTA scenario as an explicit floor/identifiability control.
 
 ## Safe default run
 
@@ -20,7 +20,7 @@ Only after the smoke run succeeds and the provider configuration has been checke
 uv run livebench-hermes-ab --full
 ```
 
-`--full` is deliberately explicit. For the current config it changes the run from 1 to 20 samples per scenario and from 30 to 600 cells. The configured MoA topology raises the maximum provider-call count to 900.
+`--full` is deliberately explicit. For the current config it changes the run from 1 to 10 samples per scenario and from 30 to 300 cells. The configured MoA topology raises the maximum provider-call count to 450. To use another production sample count, change `generation.samples_per_task` in `config.yaml` before preparing the run.
 
 ## Manual lifecycle
 
