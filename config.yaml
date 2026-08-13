@@ -1,7 +1,7 @@
 # Harness settings are outside each arm. Every arms.<name>.hermes subtree is
 # copied verbatim to runs/<run>/homes/<name>/config.yaml. Never put secrets here.
 experiment:
-  id: livebench-hermes-hard-cohort-15x10-v13-selection
+  id: livebench-hermes-confirmatory-15x20-v14
   upstream_commit: 00eae856aa1c1a9e9d058a65a9a94d85884034c4
   release: '2026-06-25'
   seed: 5615
@@ -27,9 +27,10 @@ selection:
       family: olympiad
     - id: 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536
       family: olympiad
-    language:
-    - id: 27662d962f1e50ef82296d3b3e60ea96b719aee5d821f390beb1fd4af4e5385f
-      family: connections
+    - id: 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7
+      family: olympiad
+    - id: 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421
+      family: olympiad
     data_analysis:
     - id: d89584191190995d5cb7307c938dbfb201e3af17ed7f666c2afae0fe2ad55985
       family: tablejoin
@@ -41,12 +42,10 @@ selection:
       family: tablejoin
     - id: 4d351c29bdddf5c41d59cd7bd1b70bb4d2ae2a071ada382d7690066b1cd7764c
       family: tablejoin
-    - id: 58223a1f18c3cda82967cc3ba7d24813209e41470aee583167ee938ae01d3d21
-      family: cta
-    - id: d3d910189e70e5e5edd9a3f76420da1e8a5578b966ceef1c3936fb6b8e456551
-      family: cta
+    - id: d4b2efd567053821eedf1ea3f759d4948f50264b94bd6ff37b18bc92e79d4fc1
+      family: tablejoin
 generation:
-  samples_per_task: 10
+  samples_per_task: 20
   retry:
     max_attempts: 2
     retryable_codes: []

@@ -1,6 +1,6 @@
 # LiveBench Hermes multi-arm harness
 
-This repository runs a frozen two-arm Hermes experiment using a typed, schema-versioned harness. The default matrix contains 15 scenarios, ten samples per scenario, and two arms: 300 cells and at most 450 provider calls. The active arms are `base` and `moa_mimo`; `moa_minimax` and `gpt_medium` are no longer part of future runs. The active v13 selection cohort replaces six scenarios that were exactly saturated for the current arms with output-blind `olympiad`, `tablejoin`, and `cta` candidates.
+This repository runs a frozen two-arm Hermes experiment using a typed, schema-versioned harness. The full matrix contains 15 scenarios, 20 samples per scenario, and two arms: 600 cells and at most 900 provider calls. The active arms are `base` and `moa_mimo`. The v14 confirmatory cohort replaces floor- and ceiling-saturated scenarios using a separately scored one-sample selection pilot.
 
 ## Safe default run
 
@@ -20,7 +20,7 @@ Only after the smoke run succeeds and the provider configuration has been checke
 uv run livebench-hermes-ab --full
 ```
 
-`--full` is deliberately explicit. For the current config it changes the run from 1 to 10 samples per scenario and from 30 to 300 cells. The configured MoA topology raises the maximum provider-call count to 450.
+`--full` is deliberately explicit. For the current config it changes the run from 1 to 20 samples per scenario and from 30 to 600 cells. The configured MoA topology raises the maximum provider-call count to 900.
 
 ## Manual lifecycle
 
@@ -63,7 +63,7 @@ uv run livebench-hermes-ab --config config.yaml score --run-dir runs/default
 
 Cell outcomes are durable and reason-coded. A harness failure stops admission, drains active calls, preserves their terminal evidence, and does not publish the execution-complete marker. Scoring uses only the common valid pair intersection across every arm. Historical schema-v1 runs are immutable evidence and are rejected rather than reinterpreted.
 
-See [configuration](docs/configuration.md), [technical reference](docs/technical-reference.md), and the [schema documents](docs/schemas/manifest-v2.md).
+See [configuration](docs/configuration.md), [technical reference](docs/technical-reference.md), the [v14 confirmatory protocol](docs/evals/confirmatory-v14.md), and the [schema documents](docs/schemas/manifest-v2.md).
 
 ## Evaluation results
 

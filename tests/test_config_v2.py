@@ -16,8 +16,8 @@ def test_default_config_is_strict_typed_and_ordered() -> None:
     assert config.execution.mode == "streaming"
     assert config.scoring.schema_version == 2
     assert config.generation.retry.retryable_codes == frozenset()
-    assert config.experiment_id == "livebench-hermes-hard-cohort-15x10-v13-selection"
-    assert config.generation.samples_per_task == 10
+    assert config.experiment_id == "livebench-hermes-confirmatory-15x20-v14"
+    assert config.generation.samples_per_task == 20
     scenarios = [
         item
         for items in config.selection.scenarios.values()
@@ -30,9 +30,7 @@ def test_default_config_is_strict_typed_and_ordered() -> None:
         "paraphrase",
         "math_comp",
         "olympiad",
-        "connections",
         "tablejoin",
-        "cta",
     }
     for arm in config.arms:
         preset = arm.hermes["moa"].get("presets", {}).get("default")
