@@ -44,6 +44,7 @@ class ScoreRow:
     family: str
     arm: str
     score: float
+    elapsed_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,7 +188,19 @@ def score_run(run: FrozenRun, adapters: Mapping[str, ScoreAdapter]) -> ScoringRe
             outcome = valid[(arm, pair)]
             answer = _answer_text(outcome.answer_record)
             score = float(adapter(question.raw, answer))
-            rows.append(ScoreRow(pair, outcome.cell.question_id, question.category, question.task, arm, score))
+            if outcome.elapsed_seconds is None:
+                raise IntegrityError("valid outcome missing elapsed_seconds")
+            rows.append(
+                ScoreRow(
+                    pair,
+                    outcome.cell.question_id,
+                    question.category,
+                    question.task,
+                    arm,
+                    score,
+                    outcome.elapsed_seconds,
+                )
+            )
             by_arm[arm].append(score)
     means = {arm: sum(by_arm[arm]) / len(by_arm[arm]) for arm in run.arm_order}
     comparisons = {
@@ -362,6 +375,60 @@ def grouped_statistics(result: ScoringResult) -> dict[str, object]:
     return {"scenarios": scenarios, "families": families}
 
 
+def _timing_distribution(values: list[float]) -> dict[str, object]:
+    result = _distribution(values)
+    result["sum_seconds"] = sum(values)
+    return result
+
+
+def timing_statistics(result: ScoringResult) -> dict[str, object]:
+    baseline = result.baseline_arm
+
+    def group(rows: list[ScoreRow]) -> dict[str, object]:
+        baseline_by_pair = {
+            row.pair_id: row.elapsed_seconds for row in rows if row.arm == baseline
+        }
+        return {
+            "arms": {
+                arm: _timing_distribution(
+                    [row.elapsed_seconds for row in rows if row.arm == arm]
+                )
+                for arm in result.arm_order
+            },
+            "paired_deltas_vs_baseline": {
+                arm: _timing_distribution([
+                    row.elapsed_seconds - baseline_by_pair[row.pair_id]
+                    for row in rows if row.arm == arm
+                ])
+                for arm in result.arm_order if arm != baseline
+            },
+        }
+
+    scenarios: dict[str, object] = {}
+    for question_id in sorted({row.question_id for row in result.rows}):
+        rows = [row for row in result.rows if row.question_id == question_id]
+        scenarios[question_id] = {
+            "category": rows[0].category,
+            "family": rows[0].family,
+            **group(rows),
+        }
+    families: dict[str, object] = {}
+    for family in sorted({row.family for row in result.rows}):
+        rows = [row for row in result.rows if row.family == family]
+        families[family] = {
+            "categories": sorted({row.category for row in rows}),
+            "scenario_count": len({row.question_id for row in rows}),
+            **group(rows),
+        }
+    return {
+        "cohort": "common_valid_pairs",
+        "unit": "seconds",
+        "overall": group(list(result.rows)),
+        "scenarios": scenarios,
+        "families": families,
+    }
+
+
 def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
     statistics_value = {
         arm: {
@@ -405,10 +472,12 @@ def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
             "arms": statistics_value,
         },
         "grouped_statistics": grouped_statistics(result),
+        "timing_statistics": timing_statistics(result),
     }
     scores = [
         {"pair_id": row.pair_id, "question_id": row.question_id, "category": row.category,
-         "family": row.family, "arm": row.arm, "score": row.score}
+         "family": row.family, "arm": row.arm, "score": row.score,
+         "elapsed_seconds": row.elapsed_seconds}
         for row in result.rows
     ]
     encode = lambda value: (

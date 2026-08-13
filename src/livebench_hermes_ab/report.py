@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .scoring import ScoringResult, grouped_statistics
+from .scoring import ScoringResult, grouped_statistics, timing_statistics
 
 
 def _statistic(value: float | None) -> str:
@@ -130,6 +130,55 @@ def _grouped_statistics(result: ScoringResult) -> list[str]:
     return lines
 
 
+def _timing_statistics(result: ScoringResult) -> list[str]:
+    timing = timing_statistics(result)
+    overall = timing["overall"]
+    assert isinstance(overall, dict)
+    lines = [
+        "", "## Overall wall-time statistics", "",
+        "Timings use common-valid paired cells. Values are seconds; sums are cell-seconds, not pipeline elapsed time.", "",
+        "| Arm/paired delta | n | Mean | SD | Sum | p05 | p25 | p50 | p75 | p95 |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+
+    def timing_cells(value: dict[str, object]) -> str:
+        cells = _distribution_cells(value).split(" | ")
+        cells.insert(3, f"{float(value['sum_seconds']):.4f}")
+        return " | ".join(cells)
+
+    for arm in result.arm_order:
+        lines.append(f"| {arm} | {timing_cells(overall['arms'][arm])} |")
+    for arm, distribution in overall["paired_deltas_vs_baseline"].items():
+        lines.append(f"| Δ {arm}−{result.baseline_arm} | {timing_cells(distribution)} |")
+    lines.extend([
+        "", "## Per-scenario wall-time statistics", "",
+        "| Scenario | Category | Family | Arm/paired delta | n | Mean | SD | Sum | p05 | p25 | p50 | p75 | p95 |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ])
+    scenarios = timing["scenarios"]
+    assert isinstance(scenarios, dict)
+    for question_id, item in scenarios.items():
+        assert isinstance(item, dict)
+        for arm in result.arm_order:
+            lines.append(f"| {question_id} | {item['category']} | {item['family']} | {arm} | {timing_cells(item['arms'][arm])} |")
+        for arm, distribution in item["paired_deltas_vs_baseline"].items():
+            lines.append(f"| {question_id} | {item['category']} | {item['family']} | Δ {arm}−{result.baseline_arm} | {timing_cells(distribution)} |")
+    lines.extend([
+        "", "## Per-family wall-time statistics", "",
+        "| Family | Scenarios | Arm/paired delta | n | Mean | SD | Sum | p05 | p25 | p50 | p75 | p95 |",
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ])
+    families = timing["families"]
+    assert isinstance(families, dict)
+    for family, item in families.items():
+        assert isinstance(item, dict)
+        for arm in result.arm_order:
+            lines.append(f"| {family} | {item['scenario_count']} | {arm} | {timing_cells(item['arms'][arm])} |")
+        for arm, distribution in item["paired_deltas_vs_baseline"].items():
+            lines.append(f"| {family} | {item['scenario_count']} | Δ {arm}−{result.baseline_arm} | {timing_cells(distribution)} |")
+    return lines
+
+
 def render_markdown_report(result: ScoringResult) -> str:
     lines = [
         "# LiveBench Hermes experiment",
@@ -147,5 +196,6 @@ def render_markdown_report(result: ScoringResult) -> str:
         lines.extend(f"- {code}: {count}" for code, count in result.exclusion_counts.items())
     lines.extend(_statistical_analysis(result))
     lines.extend(_grouped_statistics(result))
+    lines.extend(_timing_statistics(result))
     lines.extend(_trace_audit(result))
     return "\n".join(lines) + "\n"

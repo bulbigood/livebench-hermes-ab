@@ -142,8 +142,18 @@ def test_report_and_summary_include_per_scenario_and_family_percentiles() -> Non
     assert family["scenario_count"] == 2
     assert family["arms"]["candidate"]["n"] == 4
     assert family["arms"]["candidate"]["percentiles"]["p95"] == 0.985
+    timing = summary["timing_statistics"]
+    assert timing["cohort"] == "common_valid_pairs"
+    assert timing["overall"]["arms"]["base"]["n"] == 6
+    assert timing["overall"]["arms"]["base"]["sum_seconds"] == 6.0
+    assert timing["scenarios"]["q1"]["arms"]["candidate"]["mean"] == 1.0
+    assert timing["scenarios"]["q1"]["paired_deltas_vs_baseline"]["candidate"]["mean"] == 0.0
+    assert timing["families"]["olympiad"]["arms"]["base"]["n"] == 4
     assert "## Per-scenario statistics and percentiles" in report
     assert "## Per-family statistics and percentiles" in report
+    assert "## Overall wall-time statistics" in report
+    assert "## Per-scenario wall-time statistics" in report
+    assert "## Per-family wall-time statistics" in report
     assert "| q1 | math | olympiad | base |" in report
     assert "| olympiad | 2 | candidate |" in report
 
