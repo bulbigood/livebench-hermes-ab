@@ -43,3 +43,7 @@ uv run livebench-hermes-ab --config config.yaml score --run-dir runs/default
 Cell outcomes are durable and reason-coded. A harness failure stops admission, drains active calls, preserves their terminal evidence, and does not publish the execution-complete marker. Scoring uses only the common valid pair intersection across every arm. Historical schema-v1 runs are immutable evidence and are rejected rather than reinterpreted.
 
 See [configuration](docs/configuration.md), [technical reference](docs/technical-reference.md), and the [schema documents](docs/schemas/manifest-v2.md).
+
+## Evaluation results
+
+- [2026-08-13 full paid run](docs/evals/results/2026-08-13-full-paid.md) — 600 cells, 139/150 common-valid pairs; `moa_mimo` achieved the highest mean score at 0.9285.
