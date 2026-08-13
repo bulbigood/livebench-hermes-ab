@@ -67,5 +67,4 @@ See [configuration](docs/configuration.md), [technical reference](docs/technical
 
 ## Evaluation results
 
-- [Hard cohort v10 selection](docs/evals/hard-cohort-v10.md) — fixed 15 × 10 matrix replacing saturated scenarios with output-blind deterministic families; not yet a scored result.
-- [2026-08-13 full paid run](docs/evals/results/2026-08-13-full-paid.md) — 600 cells, 139/150 common-valid pairs; `moa_mimo` achieved the highest mean score at 0.9285.
+- [2026-08-13 hard cohort v10](docs/evals/results/2026-08-13-hard-cohort-v10.md) — 600 cells, 119/150 common-valid pairs; `moa_minimax` ranked first at 0.9494, only 0.0005 above `moa_mimo`; six scen...[truncated]
