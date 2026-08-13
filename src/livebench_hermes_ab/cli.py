@@ -4,7 +4,12 @@ import argparse
 import json
 import os
 import sys
+import tempfile
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
+
+import yaml
 
 from .artifacts import FilesystemArtifactStore
 from .config import ExperimentConfig, load_config
@@ -29,7 +34,26 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _workers(value: int | str) -> int:
-    return min(32, max(1, (os.cpu_count() or 1) * 4)) if value == "auto" else int(value)
+    return min(40, max(1, (os.cpu_count() or 1) * 5)) if value == "auto" else int(value)
+
+
+def _default_run_dir() -> Path:
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return ROOT / "runs" / f"smoke-{stamp}"
+
+
+def _pipeline_config(config_path: Path, full: bool) -> tuple[ExperimentConfig, Path | None]:
+    config = load_config(config_path)
+    if full or config.generation.samples_per_task == 1:
+        return config, None
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw["generation"]["samples_per_task"] = 1
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", prefix="livebench-smoke-", delete=False, encoding="utf-8"
+    ) as handle:
+        yaml.safe_dump(raw, handle, sort_keys=False)
+        path = Path(handle.name)
+    return replace(config, generation=replace(config.generation, samples_per_task=1)), path
 
 
 def _load_frozen(
@@ -141,11 +165,48 @@ def command_score(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def command_pipeline(args: argparse.Namespace) -> dict[str, object]:
+    run_dir = args.run_dir or _default_run_dir()
+    config, temporary_config = _pipeline_config(args.config, args.full)
+    config_path = temporary_config or args.config
+    pipeline_args = argparse.Namespace(
+        config=config_path,
+        hermes_executable=args.hermes_executable,
+        run_dir=run_dir,
+        credentials_file=args.credentials_file,
+    )
+    try:
+        command_prepare(pipeline_args, config)
+        execution = command_run(pipeline_args)
+        scoring = command_score(pipeline_args)
+        return {
+            "status": "complete",
+            "run_dir": str(run_dir),
+            "samples_per_task": config.generation.samples_per_task,
+            "execution": execution,
+            "scoring": scoring,
+        }
+    finally:
+        if temporary_config is not None:
+            temporary_config.unlink(missing_ok=True)
+
+
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description="Typed multi-arm Hermes LiveBench harness")
     value.add_argument("--config", type=Path, default=ROOT / "config.yaml")
     value.add_argument("--hermes-executable", type=Path)
-    commands = value.add_subparsers(dest="command", required=True)
+    value.add_argument(
+        "--full",
+        action="store_true",
+        help="use generation.samples_per_task from config; default pipeline uses one sample",
+    )
+    value.add_argument("--run-dir", type=Path, help="pipeline output directory")
+    value.add_argument(
+        "--credentials-file",
+        type=Path,
+        help="pipeline dotenv secret source; defaults to $HERMES_HOME/.env",
+    )
+    commands = value.add_subparsers(dest="command")
     for name in ("prepare", "run", "resume", "score"):
         command = commands.add_parser(name)
         command.add_argument("--run-dir", type=Path, required=True)
@@ -163,6 +224,11 @@ def parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = parser().parse_args()
     try:
+        if args.command is None:
+            print(json.dumps(command_pipeline(args), indent=2, ensure_ascii=False))
+            return
+        if args.full:
+            raise ValueError("--full is only valid for the default pipeline")
         config = load_config(args.config) if args.command == "prepare" else None
         handler = {
             "prepare": lambda: command_prepare(args, config),

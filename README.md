@@ -2,7 +2,29 @@
 
 This repository runs a frozen four-arm Hermes experiment using a typed, schema-versioned harness. The default matrix contains 15 scenarios, ten samples per scenario, and four arms: 600 cells and 900 provider calls. The current hard cohort replaces saturated pilot scenarios with output-blind selections from deterministic instruction-following, mathematics, language, and data-analysis families.
 
-Always prepare before any paid execution:
+## Safe default run
+
+> **Warning:** execution starts many provider calls concurrently. With `execution.workers: auto`, the harness uses five workers per detected CPU, capped at 40. A run can consume API tokens and rate limits very quickly. Before a full evaluation, run the one-sample default pipeline and verify every configured model, MoA reference model, token limit, provider credential, account budget, and API rate limit.
+
+Running the command without a subcommand executes the complete `prepare → run → score` pipeline with **one sample per scenario**, regardless of the larger sample count stored in `config.yaml`:
+
+```bash
+uv run livebench-hermes-ab
+```
+
+The output is written to a timestamped `runs/smoke-<UTC timestamp>` directory. Use `--run-dir` to choose another destination or `--credentials-file` to select a dotenv source.
+
+Only after the smoke run succeeds and the provider configuration has been checked should you opt into the sample count from the config:
+
+```bash
+uv run livebench-hermes-ab --full
+```
+
+`--full` is deliberately explicit. For the current config it changes the run from 1 to 10 samples per scenario and from 60 to 600 cells. The configured model topology can make the provider-call count larger than the cell count.
+
+## Manual lifecycle
+
+Use the canonical subcommands when preparation, execution, resume, and scoring must be controlled separately. Always prepare before any paid manual execution:
 
 ```bash
 uv run livebench-hermes-ab --config config.yaml prepare --run-dir runs/default
@@ -22,8 +44,7 @@ uv run livebench-hermes-ab --config config.yaml prepare \
   --run-dir runs/default
 ```
 
-Samples, scheduling mode, and worker count are configured only in `config.yaml` and
-frozen in `config.snapshot.yaml` and `manifest.json`. In `balanced_waves` mode,
+Samples and scheduling mode are frozen in `config.snapshot.yaml` and `manifest.json`. The default pipeline safely overrides `generation.samples_per_task` to one in its frozen snapshot; `--full` preserves the configured value. Worker count remains controlled by `execution.workers`. `auto` resolves to five workers per detected CPU with a hard maximum of 40. In `balanced_waves` mode,
 `execution.workers` must be an explicit multiple of the arm count. With four arms,
 8 workers run two complete arm waves concurrently; 7 workers fail before execution.
 
