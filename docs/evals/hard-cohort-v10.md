@@ -32,6 +32,6 @@ The local adapter now explicitly dispatches `math_comp`, `olympiad`, `cta`, and 
 - Pinned upstream commit: `00eae856aa1c1a9e9d058a65a9a94d85884034c4`.
 - Release and removal lifecycle checks are enforced by the harness.
 - Known-ground-truth scorer sanity checks run in the test suite.
-- A successful `prepare` confirms 600 cells and 900 expected provider calls.
+- A successful v10 `prepare` confirmed 600 cells and 900 expected provider calls.
 - No candidate model outputs were used to choose these records.
 - Difficulty and discrimination remain hypotheses until a paid run is scored.
