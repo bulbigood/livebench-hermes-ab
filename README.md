@@ -67,4 +67,17 @@ See [configuration](docs/configuration.md), [technical reference](docs/technical
 
 ## Evaluation results
 
-- [2026-08-13 hard cohort v10](docs/evals/results/2026-08-13-hard-cohort-v10.md) — 600 cells, 119/150 common-valid pairs; `moa_minimax` ranked first at 0.9494, only 0.0005 above `moa_mimo`; six scen...[truncated]
+### Hard cohort v10 — 2026-08-13
+
+The completed paid run executed **600/600 cells**. Primary scoring used **119/150 common-valid pairs (79.33%)**:
+
+| Rank | Arm | Mean | Delta vs `base` |
+|---:|---|---:|---:|
+| 1 | `moa_minimax` | **0.9494** | +0.0276 |
+| 2 | `moa_mimo` | **0.9489** | +0.0271 |
+| 3 | `gpt_medium` | **0.9256** | +0.0038 |
+| 4 | `base` | **0.9218** | — |
+
+`moa_minimax` led `moa_mimo` by only **0.0005**. All paired 95% confidence intervals for improvements over `base` crossed zero, so the run ranks the arms but does not establish confirmatory superiority. Reliability also differed materially: 31 pairs were excluded due to 26 invalid MoA traces and 5 timeouts; 27 excluded cells belonged to `moa_minimax`, 4 to `moa_mimo`, and none to the non-MoA arms. Six of the 15 scenarios remained fully saturated.
+
+See the [full hard-cohort v10 report](docs/evals/results/2026-08-13-hard-cohort-v10.md) for scenario-level scores, category results, exclusions, trace-token totals, confidence intervals, and comparison with v9.
