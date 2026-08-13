@@ -23,7 +23,7 @@ def test_default_config_is_strict_typed_and_ordered() -> None:
         "https://github.com/NousResearch/hermes-agent.git"
     )
     assert config.compatibility.hermes.commit == (
-        "863e31318553cda8ad61df681d08175364d4164b"
+        "bfff32ae8c6a9c585431997a6cc3d791b6ec9af5"
     )
     scenarios = [
         item

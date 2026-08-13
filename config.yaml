@@ -59,7 +59,7 @@ compatibility:
   # Git mode checks out this exact revision into the harness cache.
   hermes:
     repository: https://github.com/NousResearch/hermes-agent.git
-    commit: 863e31318553cda8ad61df681d08175364d4164b
+    commit: bfff32ae8c6a9c585431997a6cc3d791b6ec9af5
 arms:
   base:
     credential_env: []

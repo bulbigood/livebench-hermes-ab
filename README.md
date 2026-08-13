@@ -42,7 +42,7 @@ compatibility:
 compatibility:
   hermes:
     repository: https://github.com/NousResearch/hermes-agent.git
-    commit: 863e31318553cda8ad61df681d08175364d4164b
+    commit: bfff32ae8c6a9c585431997a6cc3d791b6ec9af5
 
 # Existing source/install directory; the path must be absolute
 compatibility:
