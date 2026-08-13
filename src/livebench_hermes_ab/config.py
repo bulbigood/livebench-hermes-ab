@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,8 +34,17 @@ class ExecutionConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class HermesSourceConfig:
+    mode: Literal["release", "git", "directory"]
+    release: str | None = None
+    repository: str | None = None
+    commit: str | None = None
+    directory: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CompatibilityConfig:
-    hermes_profile: str
+    hermes: HermesSourceConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +132,35 @@ def _positive_int(value: object, path: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ConfigError(f"{path} must be a positive integer")
     return value
+
+
+def _parse_hermes_source(value: object) -> HermesSourceConfig:
+    source = _mapping(value, "compatibility.hermes")
+    keys = set(source)
+    if keys == {"release"}:
+        release = source["release"]
+        if not isinstance(release, str) or not re.fullmatch(r"\d+\.\d+\.\d+", release):
+            raise ConfigError("compatibility.hermes.release must be a semantic version")
+        return HermesSourceConfig("release", release=release)
+    if keys <= {"repository", "commit"} and keys:
+        if keys != {"repository", "commit"}:
+            raise ConfigError("compatibility.hermes git mode requires repository and commit")
+        repository, commit = source["repository"], source["commit"]
+        if not isinstance(repository, str) or not repository.strip():
+            raise ConfigError("compatibility.hermes.repository must be non-empty")
+        if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+            raise ConfigError("compatibility.hermes.commit must be a full 40-character SHA")
+        return HermesSourceConfig("git", repository=repository, commit=commit.lower())
+    if keys == {"directory"}:
+        directory = source["directory"]
+        if (
+            not isinstance(directory, str)
+            or not directory.strip()
+            or not Path(directory).expanduser().is_absolute()
+        ):
+            raise ConfigError("compatibility.hermes.directory must be an absolute path")
+        return HermesSourceConfig("directory", directory=directory)
+    raise ConfigError("compatibility.hermes must select exactly one source mode")
 
 
 def _parse_selection(value: object) -> SelectionConfig:
@@ -238,7 +277,6 @@ def parse_config(value: object) -> ExperimentConfig:
     compatibility = _mapping(root["compatibility"], "compatibility")
     _keys(compatibility, {"hermes"}, "compatibility")
     hermes_compat = _mapping(compatibility["hermes"], "compatibility.hermes")
-    _keys(hermes_compat, {"profile"}, "compatibility.hermes")
     scoring = _mapping(root["scoring"], "scoring")
     _keys(
         scoring,
@@ -279,7 +317,7 @@ def parse_config(value: object) -> ExperimentConfig:
         execution=ExecutionConfig(
             mode, workers, _positive_int(execution["timeout_seconds"], "execution.timeout_seconds")
         ),  # type: ignore[arg-type]
-        compatibility=CompatibilityConfig(str(hermes_compat["profile"])),
+        compatibility=CompatibilityConfig(_parse_hermes_source(hermes_compat)),
         scoring=ScoringContract(
             "livebench-objective-ground-truth", 2, confidence_level, target_margin
         ),

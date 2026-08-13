@@ -55,10 +55,11 @@ execution:
   timeout_seconds: 1800
   baseline_arm: base
 compatibility:
-  # Verified reference profile. Another installed version is allowed with a
-  # persistent unverified-version warning; changing this string does not add support.
+  # Hermes source is exclusive: release, repository+commit, or directory.
+  # Git mode checks out this exact revision into the harness cache.
   hermes:
-    profile: 0.19.1
+    repository: https://github.com/NousResearch/hermes-agent.git
+    commit: 863e31318553cda8ad61df681d08175364d4164b
 arms:
   base:
     credential_env: []

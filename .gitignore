@@ -2,6 +2,7 @@
 .venv/
 .hermes/
 .hermes-runtime/
+.cache/
 
 # Python and test caches.
 __pycache__/

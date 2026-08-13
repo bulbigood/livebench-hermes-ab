@@ -15,7 +15,12 @@ from .artifacts import FilesystemArtifactStore
 from .config import ExperimentConfig, load_config
 from .domain import ExclusionCode, HarnessError, IntegrityError
 from .execution import CellRunner, ExecutionService
-from .hermes import SubprocessHermesRunner, probe_compatibility, resolve_hermes_executable
+from .hermes import (
+    SubprocessHermesRunner,
+    materialize_git_source,
+    probe_compatibility,
+    resolve_hermes_command,
+)
 from .manifest import (
     CompatibilityResult,
     RunManifest,
@@ -66,10 +71,14 @@ def _load_frozen(
 
 
 def command_prepare(args: argparse.Namespace, config: ExperimentConfig) -> dict[str, object]:
-    executable = resolve_hermes_executable(args.hermes_executable)
-    version, verified, warning = probe_compatibility(
-        executable, config.compatibility.hermes_profile
-    )
+    source = config.compatibility.hermes
+    source_directory = ROOT
+    if source.mode == "git" and args.hermes_executable is None:
+        source_directory = materialize_git_source(
+            source, ROOT / ".cache" / "hermes" / str(source.commit)
+        )
+    executable = resolve_hermes_command(source, source_directory, args.hermes_executable)
+    version, verified, warning = probe_compatibility(executable, source)
     manifest = prepare_run(
         ROOT,
         args.config,
@@ -82,9 +91,18 @@ def command_prepare(args: argparse.Namespace, config: ExperimentConfig) -> dict[
 
 
 def _service(
-    args: argparse.Namespace, manifest: RunManifest, store: FilesystemArtifactStore
+    args: argparse.Namespace,
+    manifest: RunManifest,
+    store: FilesystemArtifactStore,
+    config: ExperimentConfig,
 ) -> ExecutionService:
-    executable = resolve_hermes_executable(args.hermes_executable)
+    source = config.compatibility.hermes
+    source_directory = (
+        ROOT / ".cache" / "hermes" / str(source.commit)
+        if source.mode == "git"
+        else ROOT
+    )
+    executable = resolve_hermes_command(source, source_directory, args.hermes_executable)
 
     runner = CellRunner(
         SubprocessHermesRunner(executable),
@@ -98,9 +116,10 @@ def _service(
 
 def command_run(args: argparse.Namespace) -> dict[str, object]:
     manifest, _, store = _load_frozen(args.run_dir)
+    config = load_config(args.run_dir / "config.snapshot.yaml")
     if store.load_cell_outcomes():
         raise IntegrityError("run already has terminal outcomes; use resume")
-    result = _service(args, manifest, store).execute(manifest.cells)
+    result = _service(args, manifest, store, config).execute(manifest.cells)
     if not result.complete:
         raise result.fatal or IntegrityError("execution incomplete")
     return {"status": "complete", "terminal_cells": len(result.outcomes)}
@@ -108,6 +127,7 @@ def command_run(args: argparse.Namespace) -> dict[str, object]:
 
 def command_resume(args: argparse.Namespace) -> dict[str, object]:
     manifest, _, store = _load_frozen(args.run_dir)
+    config = load_config(args.run_dir / "config.snapshot.yaml")
     retryable = (
         frozenset(ExclusionCode)
         if args.retry_excluded
@@ -120,7 +140,7 @@ def command_resume(args: argparse.Namespace) -> dict[str, object]:
         store,
     )
     by_id = {cell.id: cell for cell in manifest.cells}
-    result = _service(args, manifest, store).execute(
+    result = _service(args, manifest, store, config).execute(
         tuple(by_id[cell] for cell in plan.cells), plan.attempts
     )
     if not result.complete:

@@ -76,7 +76,7 @@ def test_no_network_fake_hermes_prepare_run_score(tmp_path: Path, monkeypatch) -
                     "timeout_seconds": 10,
                     "baseline_arm": "base",
                 },
-                "compatibility": {"hermes": {"profile": "0.19.1"}},
+                "compatibility": {"hermes": {"release": "0.19.1"}},
                 "arms": {
                     "base": {
                         "credential_env": [],

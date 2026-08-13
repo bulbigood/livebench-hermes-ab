@@ -18,6 +18,13 @@ def test_default_config_is_strict_typed_and_ordered() -> None:
     assert config.generation.retry.retryable_codes == frozenset()
     assert config.experiment_id == "livebench-hermes-production-15x10-v15"
     assert config.generation.samples_per_task == 10
+    assert config.compatibility.hermes.mode == "git"
+    assert config.compatibility.hermes.repository == (
+        "https://github.com/NousResearch/hermes-agent.git"
+    )
+    assert config.compatibility.hermes.commit == (
+        "863e31318553cda8ad61df681d08175364d4164b"
+    )
     scenarios = [
         item
         for items in config.selection.scenarios.values()
@@ -44,6 +51,39 @@ def test_unknown_and_legacy_config_fail_closed() -> None:
         parse_config({"experiment": {}, "legacy": True})
     with pytest.raises(ConfigError, match="required keys"):
         parse_config({"generation": {"retries": 2}})
+
+
+def test_hermes_source_supports_exactly_three_exclusive_modes() -> None:
+    import copy
+
+    import yaml
+
+    value = yaml.safe_load(Path("config.yaml").read_text())
+
+    release = copy.deepcopy(value)
+    release["compatibility"]["hermes"] = {"release": "0.19.1"}
+    parsed = parse_config(release).compatibility.hermes
+    assert (parsed.mode, parsed.release) == ("release", "0.19.1")
+
+    directory = copy.deepcopy(value)
+    directory["compatibility"]["hermes"] = {"directory": "/opt/hermes-agent"}
+    parsed = parse_config(directory).compatibility.hermes
+    assert (parsed.mode, parsed.directory) == ("directory", "/opt/hermes-agent")
+
+    invalid = copy.deepcopy(value)
+    invalid["compatibility"]["hermes"] = {
+        "release": "0.19.1",
+        "directory": "../hermes-agent",
+    }
+    with pytest.raises(ConfigError, match="exactly one source mode"):
+        parse_config(invalid)
+
+    incomplete_git = copy.deepcopy(value)
+    incomplete_git["compatibility"]["hermes"] = {
+        "repository": "https://example.test/hermes.git"
+    }
+    with pytest.raises(ConfigError, match="repository and commit"):
+        parse_config(incomplete_git)
 
 
 def test_retry_codes_are_enum_values() -> None:

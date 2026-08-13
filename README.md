@@ -30,7 +30,27 @@ Use the canonical subcommands when preparation, execution, resume, and scoring m
 uv run livebench-hermes-ab --config config.yaml prepare --run-dir runs/default
 ```
 
-`prepare` performs no model calls. It validates the strict v2 config, pinned upstream revision, selected questions, Hermes version, arm order, and planned call count, then atomically publishes a prepared directory.
+`prepare` performs no model calls. It validates the strict v2 config, pinned upstream revision, selected questions, Hermes source, arm order, and planned call count, then atomically publishes a prepared directory. Hermes can be selected in exactly one of three modes:
+
+```yaml
+# Installed release from PATH
+compatibility:
+  hermes:
+    release: 0.19.1
+
+# Exact Git revision, checked out into the harness cache
+compatibility:
+  hermes:
+    repository: https://github.com/NousResearch/hermes-agent.git
+    commit: 863e31318553cda8ad61df681d08175364d4164b
+
+# Existing source/install directory; the path must be absolute
+compatibility:
+  hermes:
+    directory: /opt/hermes-agent
+```
+
+Git and directory checkouts with `pyproject.toml` run through their own `uv run --project` environment; an existing `.venv/bin/hermes` or executable `hermes` launcher is used as fallback. `--hermes-executable` remains an explicit operator override, mainly for fixtures and diagnostics.
 
 Credential values never belong in the experiment YAML. `prepare` resolves only the variable
 names allowlisted by each arm's `credential_env`. It first checks the environment inherited by

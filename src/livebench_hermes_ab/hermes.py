@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from .config import HermesSourceConfig
 from .domain import HarnessExecutionError
 
 
@@ -53,12 +54,109 @@ def resolve_hermes_executable(explicit: str | Path | None = None) -> str:
     return path
 
 
-def build_command(request: HermesRequest, executable: str) -> list[str]:
-    return [executable, "--ignore-rules", "--oneshot", request.prompt]
+def _source_directory(source: HermesSourceConfig, base_directory: Path) -> Path:
+    if not source.directory:
+        raise HarnessExecutionError("Hermes directory source is missing")
+    path = Path(source.directory).expanduser()
+    return (base_directory / path).resolve() if not path.is_absolute() else path.resolve()
+
+
+def verify_hermes_source(source: HermesSourceConfig, directory: Path) -> str:
+    if source.mode != "git" or not source.commit:
+        return str(directory.resolve())
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        ).stdout.strip()
+        origin = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise HarnessExecutionError(f"cannot inspect Hermes git checkout: {exc}") from exc
+    if source.repository and origin.rstrip("/") != source.repository.rstrip("/"):
+        raise HarnessExecutionError(
+            f"Hermes repository mismatch: found {origin}; expected {source.repository}"
+        )
+    if head != source.commit:
+        raise HarnessExecutionError(f"Hermes commit mismatch: found {head}; expected {source.commit}")
+    return head
+
+
+def resolve_hermes_command(
+    source: HermesSourceConfig,
+    base_directory: Path,
+    explicit: str | Path | None = None,
+) -> tuple[str, ...]:
+    if explicit:
+        return (resolve_hermes_executable(explicit),)
+    if source.mode == "release":
+        return (resolve_hermes_executable(),)
+    directory = (
+        _source_directory(source, base_directory)
+        if source.mode == "directory"
+        else base_directory
+    )
+    verify_hermes_source(source, directory)
+    uv = shutil.which("uv")
+    if (directory / "pyproject.toml").is_file() and uv:
+        command = [uv, "run", "--project", str(directory)]
+        if (directory / "uv.lock").is_file():
+            command.append("--locked")
+        return (*command, "hermes")
+    for launcher in (directory / ".venv" / "bin" / "hermes", directory / "hermes"):
+        if launcher.is_file() and os.access(launcher, os.X_OK):
+            return (str(launcher),)
+    raise HarnessExecutionError(f"Hermes executable not found in {directory}")
+
+
+def materialize_git_source(source: HermesSourceConfig, destination: Path) -> Path:
+    if source.mode != "git" or not source.repository or not source.commit:
+        raise HarnessExecutionError("Hermes git source is incomplete")
+    if not destination.exists():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run(
+                ["git", "clone", "--no-checkout", source.repository, str(destination)],
+                timeout=300,
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise HarnessExecutionError(f"cannot clone Hermes repository: {exc}") from exc
+    try:
+        subprocess.run(
+            ["git", "fetch", "--depth=1", "origin", source.commit],
+            cwd=destination,
+            timeout=300,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "checkout", "--detach", source.commit],
+            cwd=destination,
+            timeout=60,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise HarnessExecutionError(f"cannot checkout Hermes commit: {exc}") from exc
+    verify_hermes_source(source, destination)
+    return destination
+
+
+def build_command(request: HermesRequest, executable: tuple[str, ...]) -> list[str]:
+    return [*executable, "--ignore-rules", "--oneshot", request.prompt]
 
 
 class SubprocessHermesRunner:
-    def __init__(self, executable: str):
+    def __init__(self, executable: tuple[str, ...]):
         self.executable = executable
 
     def invoke(self, request: HermesRequest) -> HermesResult:
@@ -107,10 +205,12 @@ class SubprocessHermesRunner:
         )
 
 
-def probe_compatibility(executable: str, expected: str) -> tuple[str, bool, str | None]:
+def probe_compatibility(
+    executable: tuple[str, ...], source: HermesSourceConfig
+) -> tuple[str, bool, str | None]:
     try:
         process = subprocess.run(
-            [executable, "--version"], capture_output=True, text=True, timeout=30, check=False
+            [*executable, "--version"], capture_output=True, text=True, timeout=30, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise HarnessExecutionError(f"Hermes compatibility probe failed: {exc}") from exc
@@ -120,9 +220,11 @@ def probe_compatibility(executable: str, expected: str) -> tuple[str, bool, str 
     if not match:
         raise HarnessExecutionError("could not parse Hermes version")
     version = match.group(0)
-    verified = version == expected
+    verified = source.mode != "release" or version == source.release
     return (
         version,
         verified,
-        None if verified else f"unverified Hermes version {version}; expected {expected}",
+        None
+        if verified
+        else f"unverified Hermes version {version}; expected {source.release}",
     )
