@@ -10,14 +10,13 @@ def test_default_config_is_strict_typed_and_ordered() -> None:
     config = load_config(Path("config.yaml"))
     assert tuple(arm.name for arm in config.arms) == (
         "base",
-        "gpt_medium",
         "moa_mimo",
     )
     assert config.baseline_arm == "base"
     assert config.execution.mode == "streaming"
     assert config.scoring.schema_version == 2
     assert config.generation.retry.retryable_codes == frozenset()
-    assert config.experiment_id == "livebench-hermes-hard-cohort-15x10-v11"
+    assert config.experiment_id == "livebench-hermes-hard-cohort-15x10-v12"
     assert config.generation.samples_per_task == 10
     scenarios = [
         item
@@ -85,12 +84,12 @@ def test_balanced_workers_must_be_explicit_multiple_of_arm_count() -> None:
 
     value = yaml.safe_load(Path("config.yaml").read_text())
     value["execution"]["mode"] = "balanced_waves"
-    value["execution"]["workers"] = 7
-    with pytest.raises(ConfigError, match="multiple of the 3 arms"):
+    value["execution"]["workers"] = 5
+    with pytest.raises(ConfigError, match="multiple of the 2 arms"):
         parse_config(value)
 
-    value["execution"]["workers"] = 6
-    assert parse_config(value).execution.workers == 6
+    value["execution"]["workers"] = 4
+    assert parse_config(value).execution.workers == 4
 
     value["execution"]["workers"] = "auto"
     with pytest.raises(ConfigError, match="requires an explicit worker count"):

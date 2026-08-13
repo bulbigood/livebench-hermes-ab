@@ -1,7 +1,7 @@
 # Harness settings are outside each arm. Every arms.<name>.hermes subtree is
 # copied verbatim to runs/<run>/homes/<name>/config.yaml. Never put secrets here.
 experiment:
-  id: livebench-hermes-hard-cohort-15x10-v11
+  id: livebench-hermes-hard-cohort-15x10-v12
   upstream_commit: 00eae856aa1c1a9e9d058a65a9a94d85884034c4
   release: '2026-06-25'
   seed: 5615
@@ -95,18 +95,6 @@ arms:
         - spotify
         - yuanbao
         - computer_use
-      moa:
-        enabled: false
-        save_traces: false
-  gpt_medium:
-    credential_env: []
-    hermes:
-      model:
-        provider: openai-codex
-        default: gpt-5.6-sol
-      agent:
-        reasoning_effort: medium
-        disabled_toolsets: *id001
       moa:
         enabled: false
         save_traces: false
