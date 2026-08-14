@@ -68,15 +68,15 @@ The 15×20 row already includes the original samples 1–10; the 15×10 director
 
 | Stage | Arm | Recorded reference calls | Input tokens | Output tokens | Total tokens | Recorded cost field |
 |---|---|---:|---:|---:|---:|---:|
-| Smoke 15×1 | Legacy | 15 | 1,129 | 226,889 | 228,018 | $0.063687 |
-| Smoke 15×1 | Critic | 15 | 34,835 | 246,730 | 281,565 | $0.073961 |
-| Smoke 15×1 | Neutral | 15 | 30,184 | 244,420 | 274,604 | $0.072663 |
-| Selection 15×20 | Legacy | 298 | 289,346 | 3,956,983 | 4,246,329 | $1.148464 |
-| Selection 15×20 | Critic | 298 | 350,202 | 3,792,012 | 4,142,214 | $1.110792 |
-| Selection 15×20 | Neutral | 298 | 331,734 | 3,751,224 | 4,082,958 | $1.096785 |
-| **Paid total recorded** | **All reference arms** | **939** | **1,037,430** | **12,218,258** | **13,255,688** | **$3.566353** |
+| Smoke 15×1 | Legacy | 15 | 1,129 | 226,889 | 228,018 | $0.0637825104 |
+| Smoke 15×1 | Critic | 15 | 34,835 | 246,730 | 281,565 | $0.0739642176 |
+| Smoke 15×1 | Neutral | 15 | 30,184 | 244,420 | 274,604 | $0.0726648104 |
+| Selection 15×20 | Legacy | 298 | 289,346 | 3,956,983 | 4,246,329 | $1.1495649480 |
+| Selection 15×20 | Critic | 298 | 350,202 | 3,792,012 | 4,142,214 | $1.1117506512 |
+| Selection 15×20 | Neutral | 298 | 331,734 | 3,751,224 | 4,082,958 | $1.0975109544 |
+| **Paid total recorded** | **All reference arms** | **939** | **1,037,430** | **12,218,258** | **13,255,688** | **$3.5692380920** |
 
-Every persisted `cost_usd` value has `cost_status: estimated` and `cost_source: provider_models_api`. Thus `$3.566353` is the exact sum of the recorded estimate fields, **not** an exact provider-billed total. Six invalid selection traces consumed calls but did not preserve usage, and OpenAI Codex aggregator usage/cost was not recorded. The current artifacts therefore cannot establish exact all-provider spend or total tokens. A future run should persist provider generation IDs, billed cost when available, aggregator usage, failed-call usage, and retry usage.
+Every persisted `cost_usd` value has `cost_status: estimated` and `cost_source: provider_models_api`. Thus `$3.5692380920` is the exact sum of the recorded estimate fields, **not** an exact provider-billed total. Six invalid selection traces consumed calls but did not preserve usage, and OpenAI Codex aggregator usage/cost was not recorded. The current artifacts therefore cannot establish exact all-provider spend or total tokens. A future run should persist provider generation IDs, billed cost when available, aggregator usage, failed-call usage, and retry usage.
 
 ## Run provenance
 
