@@ -92,7 +92,8 @@ class CellRunner:
             if home is None:
                 raise HarnessExecutionError("workspace factory did not provide an isolated home")
             answers: list[str] = []
-            trace_audit: list[dict[str, int]] = []
+            trace_audit: list[dict[str, object]] = []
+            provider_calls: list[dict[str, object]] = []
             turns = cell.turns or (cell.prompt,)
             result = None
             for index, turn in enumerate(turns):
@@ -121,29 +122,45 @@ class CellRunner:
                     )
                     return CellRunResult(outcome, diagnostic)
                 if usage is not None:
-                    trace_audit.append(usage)
+                    calls = usage.get("provider_calls")
+                    if isinstance(calls, list):
+                        provider_calls.extend(call for call in calls if isinstance(call, dict))
+                    if "expected" in usage:
+                        trace_audit.append(usage)
                 answers.append(result.stdout.strip())
             assert result is not None
             answer = answers[-1]
+            moa_traces = [
+                audit["trace_record"]
+                for audit in trace_audit
+                if isinstance(audit.get("trace_record"), dict)
+            ]
             record = {
                 "question_id": cell.id.question_id,
                 "sample_index": cell.id.sample_index,
                 "answer": answer,
                 "turns": answers,
                 "trace_audit": trace_audit,
+                "provider_calls": provider_calls,
+                "moa_traces": moa_traces,
+                "moa_trace": moa_traces[-1] if moa_traces else None,
             }
             return CellRunResult(ValidOutcome(cell.id, record, result.elapsed_seconds))
         finally:
             if workspace is not None:
                 workspace.cleanup()
 
-    def _check_result(self, cell, workspace, result):
+    def _check_result(
+        self, cell: CellSpec, workspace: object, result
+    ) -> tuple[ExcludedOutcome | None, dict[str, object] | None]:
+        missing_calls = _missing_provider_calls(workspace, "unknown")
         if result.returncode == 124:
             return ExcludedOutcome(
                 cell.id,
                 ExclusionCode.CELL_TIMEOUT,
                 result.stderr or "cell timeout",
                 result.elapsed_seconds,
+                {"provider_calls": _missing_provider_calls(workspace, "timeout")},
             ), None
         if result.returncode != 0:
             return ExcludedOutcome(
@@ -151,6 +168,7 @@ class CellRunner:
                 ExclusionCode.MODEL_OR_PROVIDER_FAILURE,
                 result.stderr or f"Hermes exited {result.returncode}",
                 result.elapsed_seconds,
+                {"provider_calls": _missing_provider_calls(workspace, "failed")},
             ), None
         answer = result.stdout.strip()
         if not answer or answer.casefold() == "(empty response)":
@@ -159,6 +177,7 @@ class CellRunner:
                 ExclusionCode.INVALID_MODEL_OUTPUT,
                 "empty model output",
                 result.elapsed_seconds,
+                {"provider_calls": missing_calls},
             ), None
         expected = getattr(workspace, "expected_trace", None)
         if expected is not None:
@@ -168,6 +187,7 @@ class CellRunner:
                     ExclusionCode.INVALID_MOA_TRACE,
                     "missing MoA trace",
                     result.elapsed_seconds,
+                    {"provider_calls": missing_calls},
                 ), None
             validation = validate_cell_trace(result.trace_bytes, expected, answer)
             if validation.exclusion is not None:
@@ -176,6 +196,13 @@ class CellRunner:
                     validation.exclusion.code,
                     validation.exclusion.reason,
                     result.elapsed_seconds,
+                    {
+                        "moa_trace": validation.sanitized_trace,
+                        "provider_calls": (
+                            [call.as_dict() for call in validation.provider_calls]
+                            or _missing_provider_calls(workspace, "invalid_trace")
+                        ),
+                    },
                 ), None
             assert validation.usage is not None
             usage = validation.usage
@@ -183,7 +210,15 @@ class CellRunner:
                 "reference_calls": usage.reference_calls,
                 "reference_input_tokens": usage.reference_input_tokens,
                 "reference_output_tokens": usage.reference_output_tokens,
-                "trace": result.trace_bytes.decode("utf-8"),
+                "trace": json.dumps(
+                    validation.sanitized_trace,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                + "\n",
+                "trace_record": validation.sanitized_trace,
+                "provider_calls": [call.as_dict() for call in validation.provider_calls],
                 "answer": answer,
                 "expected": {
                     "preset": expected.preset,
@@ -191,7 +226,32 @@ class CellRunner:
                     "aggregator": list(expected.aggregator),
                 },
             }
-        return None, None
+        return None, {"provider_calls": _missing_provider_calls(workspace, "succeeded")}
+
+
+def _missing_provider_calls(workspace: object, status: str) -> list[dict[str, object]]:
+    identities = getattr(workspace, "expected_provider_identities", ())
+    return [
+        {
+            "role": str(role),
+            "provider": str(provider),
+            "model": str(model),
+            "status": status,
+            "input_tokens": None,
+            "output_tokens": None,
+            "cache_read_tokens": None,
+            "cache_write_tokens": None,
+            "reasoning_tokens": None,
+            "estimated_cost_usd": None,
+            "actual_cost_usd": None,
+            "cost_status": "missing",
+            "cost_source": None,
+            "generation_id": None,
+            "usage_complete": False,
+            "cost_complete": False,
+        }
+        for role, provider, model in identities
+    ]
 
 
 @dataclass(frozen=True, slots=True)

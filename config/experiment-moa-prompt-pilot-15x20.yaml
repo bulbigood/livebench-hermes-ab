@@ -112,3 +112,6 @@ arms:
 scoring:
   implementation: livebench-objective-ground-truth
   schema_version: 2
+  contrasts:
+  - [moa_critic, moa_legacy]
+  - [moa_critic, moa_neutral]

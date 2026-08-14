@@ -28,6 +28,23 @@ def test_cell_schema_round_trip_and_old_schema_rejected() -> None:
         parse_cell_outcome_bytes(b'{"cell_journal_schema_version":1}')
 
 
+def test_excluded_outcome_round_trip_preserves_structured_evidence() -> None:
+    outcome = ExcludedOutcome(
+        CellId("moa", "pair", "q", 1),
+        ExclusionCode.INVALID_MOA_TRACE,
+        "bad trace",
+        2.0,
+        {"provider_calls": [{"role": "reference", "usage_complete": False}]},
+    )
+
+    parsed = parse_cell_outcome_bytes(serialize_cell_outcome(outcome))
+
+    assert isinstance(parsed, ExcludedOutcome)
+    assert parsed.evidence == {
+        "provider_calls": [{"role": "reference", "usage_complete": False}]
+    }
+
+
 def test_cell_schema_serializes_deeply_immutable_evidence() -> None:
     outcome = ValidOutcome(
         CellId("base", "pair", "q", 1),

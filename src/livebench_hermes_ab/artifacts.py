@@ -43,6 +43,7 @@ class ArtifactStore(Protocol):
     ) -> None: ...
     def promote_cell_outcome(self, outcome: CellOutcome) -> None: ...
     def load_cell_outcomes(self) -> tuple[CellOutcome, ...]: ...
+    def load_attempt_outcomes(self) -> tuple[CellOutcome, ...]: ...
     def publish_execution(self, bundle: ExecutionBundle) -> None: ...
     def publish_scoring(self, bundle: ScoringBundle) -> None: ...
     def attempt_numbers(self, cell: CellId) -> tuple[int, ...]: ...
@@ -75,6 +76,8 @@ def serialize_cell_outcome(value: CellOutcome) -> bytes:
         data.update({"status": "valid", "answer_record": _plain_json_value(value.answer_record)})
     else:
         data.update({"status": "excluded", "code": value.code.value, "reason": value.reason})
+        if value.evidence is not None:
+            data["evidence"] = _plain_json_value(value.evidence)
     return (
         json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
     )
@@ -91,7 +94,8 @@ def parse_cell_outcome_bytes(value: bytes) -> CellOutcome:
         status = data["status"]
         expected = {"cell_journal_schema_version", "cell", "elapsed_seconds", "status"}
         expected |= {"answer_record"} if status == "valid" else {"code", "reason"}
-        if set(data) != expected:
+        allowed = expected | ({"evidence"} if status == "excluded" else set())
+        if not expected <= set(data) or not set(data) <= allowed:
             raise IntegrityError("cell outcome keys differ")
         raw = data["cell"]
         if set(raw) != {"arm", "pair_id", "question_id", "sample_index"}:
@@ -110,6 +114,7 @@ def parse_cell_outcome_bytes(value: bytes) -> CellOutcome:
                 ExclusionCode(data["code"]),
                 str(data["reason"]),
                 None if elapsed is None else float(elapsed),
+                data.get("evidence"),
             )
     except (KeyError, TypeError, ValueError) as exc:
         raise IntegrityError("invalid cell outcome") from exc
@@ -203,6 +208,27 @@ class FilesystemArtifactStore:
             except ValueError as exc:
                 raise IntegrityError(f"malformed attempt artifact: {path.name}") from exc
         return tuple(sorted(numbers))
+
+    def load_attempt_outcomes(self) -> tuple[CellOutcome, ...]:
+        outcomes: list[CellOutcome] = []
+        for path in sorted((self.root / "attempts").glob("*.json")):
+            try:
+                value = json.loads(path.read_bytes())
+                if value.get("attempt_schema_version") != 1 or "outcome" not in value:
+                    raise IntegrityError(f"invalid attempt artifact: {path.name}")
+                encoded = (
+                    json.dumps(
+                        value["outcome"],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode()
+                    + b"\n"
+                )
+                outcomes.append(parse_cell_outcome_bytes(encoded))
+            except json.JSONDecodeError as exc:
+                raise IntegrityError(f"invalid attempt artifact: {path.name}") from exc
+        return tuple(outcomes)
 
     def _publish_generation(self, kind: str, files: Mapping[Path, bytes]) -> None:
         generation = uuid.uuid4().hex

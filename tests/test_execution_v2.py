@@ -84,6 +84,11 @@ def test_invalid_moa_trace_is_preserved_in_immutable_attempt_before_cleanup(
 
     assert isinstance(result.outcomes[0], ExcludedOutcome)
     assert result.outcomes[0].code is ExclusionCode.INVALID_MOA_TRACE
+    assert result.outcomes[0].evidence is not None
+    assert result.outcomes[0].evidence["provider_calls"][0]["status"] == "invalid_trace"
+    assert result.outcomes[0].evidence["moa_trace"]["references"][0]["error"] == (
+        "upstream returned no content"
+    )
     attempt = json.loads(next((tmp_path / "run" / "attempts").glob("*.json")).read_text())
     assert attempt["attempt_schema_version"] == 1
     assert attempt["outcome"]["reason"] == "empty or degraded reference"
@@ -98,6 +103,52 @@ def test_invalid_moa_trace_is_preserved_in_immutable_attempt_before_cleanup(
     assert generation is not None
     assert b'"diagnostic"' not in (generation / "outcomes.jsonl").read_bytes()
     assert (tmp_path / "workspace" / "cleaned").read_text() == "yes"
+
+
+def test_valid_trace_is_sanitized_and_embedded_with_provider_ledger(tmp_path: Path) -> None:
+    cell = CellSpec(CellId("moa", "p", "q", 1), "prompt", "moa", 2)
+    trace = json.dumps(
+        {
+            "preset": "default",
+            "api_key": "private",
+            "references": [
+                {
+                    "provider": "openrouter",
+                    "model": "ref",
+                    "output": "CANDIDATE: answer",
+                    "usage": {"input_tokens": 3, "output_tokens": 2},
+                    "cost_usd": 0.01,
+                    "cost_status": "estimated",
+                }
+            ],
+            "aggregator": {
+                "provider": "openai",
+                "model": "agg",
+                "output": "answer",
+                "usage": {"input_tokens": 5, "output_tokens": 1},
+            },
+        }
+    ).encode()
+
+    class TraceRunner:
+        def invoke(self, request: HermesRequest) -> HermesResult:
+            return HermesResult(0, "answer", "", 0.5, trace + b"\n")
+
+    class TraceWorkspace(FakeWorkspace):
+        expected_trace = ExpectedTrace(
+            cell.id, "default", (("openrouter", "ref"),), ("openai", "agg")
+        )
+
+    result = CellRunner(
+        TraceRunner(), lambda _cell: TraceWorkspace(tmp_path / "workspace")
+    ).run(cell)
+
+    assert isinstance(result.outcome, ValidOutcome)
+    encoded = json.dumps(dict(result.outcome.answer_record))
+    assert "private" not in encoded
+    assert result.outcome.answer_record["moa_trace"]["api_key"] == "[REDACTED]"
+    assert len(result.outcome.answer_record["provider_calls"]) == 2
+    assert result.outcome.answer_record["provider_calls"][1]["role"] == "aggregator"
 
 
 def test_non_utf8_moa_trace_is_excluded_and_preserved_as_base64(tmp_path: Path) -> None:

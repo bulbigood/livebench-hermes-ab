@@ -81,6 +81,25 @@ uv run livebench-hermes-ab --config config.yaml resume --run-dir runs/default
 uv run livebench-hermes-ab --config config.yaml score --run-dir runs/default
 ```
 
+To extend a completed frozen cohort without rerunning or replacing its existing
+observations, create a new run from the old one and then resume only the newly
+planned sample indices:
+
+```bash
+uv run livebench-hermes-ab extend \
+  --run-dir runs/default-10 \
+  --output-run-dir runs/default-20 \
+  --to-samples 20
+uv run livebench-hermes-ab resume --run-dir runs/default-20
+```
+
+`extend` requires an exact old-manifest subset, verifies copied cell and attempt
+digests, and records provenance in `extension.json`. Planned direct arm contrasts
+may be frozen in YAML as `scoring.contrasts: [[candidate, control]]`. Scoring also
+emits sanitised MoA mechanism evidence and an attempt-level billing summary. Missing
+provider usage, billing, or generation IDs remain explicit completeness warnings;
+they are never silently treated as zero-cost calls.
+
 Cell outcomes are durable and reason-coded. A harness failure stops admission, drains active calls, preserves their terminal evidence, and does not publish the execution-complete marker. Scoring uses only the common valid pair intersection across every arm. Historical schema-v1 runs are immutable evidence and are rejected rather than reinterpreted.
 
 See [configuration](docs/configuration.md), [technical reference](docs/technical-reference.md), the [v14 confirmatory protocol](docs/evals/confirmatory-v14.md), and the [schema documents](docs/schemas/manifest-v2.md).

@@ -76,6 +76,11 @@ class ExcludedOutcome:
     code: ExclusionCode
     reason: str
     elapsed_seconds: float | None
+    evidence: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        if self.evidence is not None:
+            object.__setattr__(self, "evidence", MappingProxyType(dict(self.evidence)))
 
 
 CellOutcome: TypeAlias = ValidOutcome | ExcludedOutcome

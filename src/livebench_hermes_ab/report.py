@@ -8,6 +8,7 @@ from .scoring import (
     ScoringResult,
     grouped_statistics,
     paired_decision_analysis,
+    planned_contrast_analysis,
     timing_statistics,
 )
 
@@ -129,6 +130,109 @@ def _paired_decision_analysis(result: ScoringResult) -> list[str]:
             f"{rendered_interval} | {item['verdict']} | "
             f"{'Unavailable' if projected is None else projected} | "
             f"{'Unavailable' if powered is None else powered} |"
+        )
+    return lines
+
+
+def _planned_contrasts(result: ScoringResult) -> list[str]:
+    if not result.contrasts:
+        return []
+    analysis = planned_contrast_analysis(result)
+    comparisons = analysis["comparisons"]
+    assert isinstance(comparisons, dict)
+    scores = {
+        arm: {row.pair_id: row.score for row in result.rows if row.arm == arm}
+        for arm in result.arm_order
+    }
+    lines = [
+        "",
+        "## Planned paired contrasts",
+        "",
+        "These contrasts were frozen in the experiment configuration before scoring.",
+        "",
+        "| Contrast | n | Mean delta | Median delta | Harm rate | Catastrophic harm rate | 95% CI | Verdict |",
+        "|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for item in comparisons.values():
+        assert isinstance(item, dict)
+        left, right = str(item["left_arm"]), str(item["right_arm"])
+        pair_ids = sorted(scores[left].keys() & scores[right].keys())
+        differences = [scores[left][pair] - scores[right][pair] for pair in pair_ids]
+        interval = item["confidence_interval"]
+        rendered_interval = (
+            "Unavailable" if interval is None
+            else f"[{float(interval[0]):.4f}, {float(interval[1]):.4f}]"
+        )
+        lines.append(
+            f"| {left} vs {right} | {item['observations']} | "
+            f"{float(item['observed_mean_delta']):.4f} | {statistics.median(differences):.4f} | "
+            f"{float(item['harm_rate']):.1%} | "
+            f"{float(item['catastrophic_harm_rate']):.1%} | {rendered_interval} | "
+            f"{item['verdict']} |"
+        )
+    return lines
+
+
+def _mechanism_statistics(result: ScoringResult) -> list[str]:
+    summary = result.mechanism_statistics
+    by_arm = summary.get("by_arm")
+    if not isinstance(by_arm, dict) or not by_arm:
+        return []
+    lines = [
+        "",
+        "## Mechanism proxies",
+        "",
+        str(summary.get("proxy_warning") or ""),
+        "",
+        "| Arm | Trace cells | Reference outputs | Candidate present | Candidate scorable | Candidate score mean | Exact adoption | Useful adoption | Erroneous adoption | Structural violations | Underdetermination signals | Wrapper present |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for arm, value in by_arm.items():
+        assert isinstance(value, dict)
+        mean = value.get("candidate_score_mean")
+        lines.append(
+            f"| {arm} | {value.get('trace_cells', 0)} | {value.get('reference_outputs', 0)} | "
+            f"{value.get('candidate_present', 0)} | {value.get('candidate_scorable', 0)} | "
+            f"{'Unavailable' if mean is None else f'{float(mean):.4f}'} | "
+            f"{value.get('candidate_exact_adoption', 0)} | "
+            f"{value.get('useful_candidate_adoption', 0)} | "
+            f"{value.get('erroneous_candidate_adoption', 0)} | "
+            f"{value.get('structural_violation_outputs', 0)} | "
+            f"{value.get('underdetermination_signal_outputs', 0)} | "
+            f"{value.get('untrusted_wrapper_present', 0)} |"
+        )
+    return lines
+
+
+def _billing_summary(result: ScoringResult) -> list[str]:
+    summary = result.billing_summary
+    groups = summary.get("groups")
+    if not isinstance(groups, list):
+        return []
+    lines = [
+        "",
+        "## Provider usage and billing completeness",
+        "",
+        f"- Evidence source: {summary.get('source')}",
+        f"- Complete: {summary.get('complete')}",
+        f"- Recorded calls: {summary.get('recorded_calls', 0)}",
+        f"- Cells/attempts without a provider ledger: {summary.get('cells_without_provider_ledger', 0)}",
+        f"- Usage-complete calls: {summary.get('usage_complete_calls', 0)}",
+        f"- Cost-complete calls: {summary.get('cost_complete_calls', 0)}",
+        f"- Calls with provider generation IDs: {summary.get('generation_id_calls', 0)}",
+        "",
+        "| Arm | Role | Provider | Model | Status | Calls | Input | Output | Reasoning | Cache read | Cache write | Estimated USD | Actual USD |",
+        "|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for value in groups:
+        assert isinstance(value, dict)
+        lines.append(
+            f"| {value['arm']} | {value['role']} | {value['provider']} | {value['model']} | "
+            f"{value['status']} | {value['calls']} | {value['input_tokens']} | "
+            f"{value['output_tokens']} | {value['reasoning_tokens']} | "
+            f"{value['cache_read_tokens']} | {value['cache_write_tokens']} | "
+            f"{float(value['estimated_cost_usd']):.10f} | "
+            f"{float(value['actual_cost_usd']):.10f} |"
         )
     return lines
 
@@ -368,7 +472,10 @@ def render_markdown_report(
         lines.extend(f"- {code}: {count}" for code, count in result.exclusion_counts.items())
     lines.extend(_statistical_analysis(result))
     lines.extend(_paired_decision_analysis(result))
+    lines.extend(_planned_contrasts(result))
     lines.extend(_grouped_statistics(result))
     lines.extend(_timing_statistics(result))
+    lines.extend(_mechanism_statistics(result))
+    lines.extend(_billing_summary(result))
     lines.extend(_trace_audit(result))
     return "\n".join(lines) + "\n"

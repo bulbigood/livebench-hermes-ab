@@ -12,6 +12,7 @@ from types import MappingProxyType
 
 from .artifacts import ScoringBundle
 from .domain import CellOutcome, ExcludedOutcome, IntegrityError, ValidOutcome
+from .evidence import billing_summary, mechanism_summary
 from .trace_validation import ExpectedTrace, validate_cell_trace
 
 ScoreAdapter = Callable[[Mapping[str, object], str], float]
@@ -34,6 +35,8 @@ class FrozenRun:
     samples_per_task: int = 1
     confidence_level: float = 0.95
     target_margin_of_error: float = 0.05
+    contrasts: tuple[tuple[str, str], ...] = ()
+    attempts: tuple[CellOutcome, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,8 +77,27 @@ class ScoringResult:
     samples_per_task: int
     minimum_common_samples_per_task: int
     arm_statistics: Mapping[str, ArmStatistics]
+    mechanism_statistics: Mapping[str, object]
+    billing_summary: Mapping[str, object]
     confidence_level: float = 0.95
     target_margin_of_error: float = 0.05
+    contrasts: tuple[tuple[str, str], ...] = ()
+
+
+def _evidence_summaries(
+    run: FrozenRun, adapters: Mapping[str, ScoreAdapter]
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    mechanisms = mechanism_summary(run.outcomes, run.questions, adapters)
+    billing = billing_summary(
+        run.attempts or run.outcomes,
+        source="attempts" if run.attempts else "terminal_outcomes",
+    )
+    return MappingProxyType(mechanisms), MappingProxyType(billing)
+
+
+def _minimum_common_samples(rows: tuple[ScoreRow, ...], baseline: str) -> int:
+    counts = Counter(row.question_id for row in rows if row.arm == baseline)
+    return min(counts.values())
 
 
 def _arm_statistics(
@@ -224,8 +246,8 @@ def score_run(run: FrozenRun, adapters: Mapping[str, ScoreAdapter]) -> ScoringRe
         "invalid_traces": exclusions.get("INVALID_MOA_TRACE", 0),
     }
     row_values = tuple(rows)
-    common_counts = Counter(row.question_id for row in row_values if row.arm == run.baseline_arm)
-    minimum_common_samples = min(common_counts.values())
+    minimum_common_samples = _minimum_common_samples(row_values, run.baseline_arm)
+    mechanisms, billing = _evidence_summaries(run, adapters)
     return ScoringResult(
         run.arm_order,
         run.baseline_arm,
@@ -246,8 +268,11 @@ def score_run(run: FrozenRun, adapters: Mapping[str, ScoreAdapter]) -> ScoringRe
             run.confidence_level,
             run.target_margin_of_error,
         ),
+        mechanisms,
+        billing,
         run.confidence_level,
         run.target_margin_of_error,
+        run.contrasts,
     )
 
 
@@ -429,27 +454,32 @@ def timing_statistics(result: ScoringResult) -> dict[str, object]:
     }
 
 
-def paired_decision_analysis(result: ScoringResult) -> dict[str, object]:
-    confidence_level = 0.95
+def _paired_analysis(
+    result: ScoringResult,
+    contrasts: tuple[tuple[str, str], ...],
+    *,
+    baseline_keys: bool = False,
+) -> dict[str, object]:
+    confidence_level = result.confidence_level
     power = 0.95
     catastrophic_harm_threshold = -0.5
     alpha = 1.0 - confidence_level
     z_alpha = statistics.NormalDist().inv_cdf(1.0 - alpha / 2.0)
     z_power = statistics.NormalDist().inv_cdf(power)
-    baseline = result.baseline_arm
     task_count = len({row.question_id for row in result.rows})
-    baseline_by_pair = {
-        row.pair_id: row.score for row in result.rows if row.arm == baseline
+    scores_by_arm = {
+        arm: {row.pair_id: row.score for row in result.rows if row.arm == arm}
+        for arm in result.arm_order
     }
     comparisons: dict[str, object] = {}
-    for arm in result.arm_order:
-        if arm == baseline:
-            continue
-        differences = [
-            row.score - baseline_by_pair[row.pair_id]
-            for row in result.rows if row.arm == arm
-        ]
+    for left, right in contrasts:
+        if left not in scores_by_arm or right not in scores_by_arm or left == right:
+            raise IntegrityError(f"invalid planned contrast: {left} vs {right}")
+        pair_ids = sorted(scores_by_arm[left].keys() & scores_by_arm[right].keys())
+        differences = [scores_by_arm[left][pair] - scores_by_arm[right][pair] for pair in pair_ids]
         observations = len(differences)
+        if not observations:
+            raise IntegrityError(f"planned contrast has no paired observations: {left} vs {right}")
         harm_count = sum(difference < 0 for difference in differences)
         catastrophic_harm_count = sum(
             difference <= catastrophic_harm_threshold for difference in differences
@@ -470,7 +500,10 @@ def paired_decision_analysis(result: ScoringResult) -> dict[str, object]:
         if deviation is not None and mean != 0:
             projected_pairs = max(2, math.ceil((z_alpha * deviation / abs(mean)) ** 2))
             power_pairs = max(2, math.ceil(((z_alpha + z_power) * deviation / abs(mean)) ** 2))
-        comparisons[arm] = {
+        key = left if baseline_keys else f"{left}_vs_{right}"
+        comparisons[key] = {
+            "left_arm": left,
+            "right_arm": right,
             "confidence_level": confidence_level,
             "power": power,
             "two_sided_alpha": alpha,
@@ -499,6 +532,17 @@ def paired_decision_analysis(result: ScoringResult) -> dict[str, object]:
         "assumption": "future effect size and paired-difference variance match this run",
         "comparisons": comparisons,
     }
+
+
+def paired_decision_analysis(result: ScoringResult) -> dict[str, object]:
+    contrasts = tuple(
+        (arm, result.baseline_arm) for arm in result.arm_order if arm != result.baseline_arm
+    )
+    return _paired_analysis(result, contrasts, baseline_keys=True)
+
+
+def planned_contrast_analysis(result: ScoringResult) -> dict[str, object]:
+    return _paired_analysis(result, result.contrasts)
 
 
 def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
@@ -534,6 +578,8 @@ def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
         "comparisons_vs_baseline": dict(result.comparisons),
         "exclusion_counts": dict(result.exclusion_counts),
         "trace_audit": dict(result.trace_audit),
+        "mechanism_statistics": dict(result.mechanism_statistics),
+        "billing_summary": dict(result.billing_summary),
         "samples_per_task": result.samples_per_task,
         "minimum_common_samples_per_task": result.minimum_common_samples_per_task,
         "statistical_analysis": {
@@ -546,6 +592,7 @@ def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
         "grouped_statistics": grouped_statistics(result),
         "timing_statistics": timing_statistics(result),
         "paired_decision_analysis": paired_decision_analysis(result),
+        "planned_contrast_analysis": planned_contrast_analysis(result),
     }
     scores = [
         {"pair_id": row.pair_id, "question_id": row.question_id, "category": row.category,

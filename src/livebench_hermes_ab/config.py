@@ -24,6 +24,7 @@ class ScoringContract:
     schema_version: int
     confidence_level: float = 0.95
     target_margin_of_error: float = 0.05
+    contrasts: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +253,47 @@ def _validate_presets(name: str, moa: dict[str, object]) -> None:
         _keys(reference, {"provider", "model"}, f"arms.{name}.reference_models[{index}]")
 
 
+def _parse_contrasts(
+    scoring: Mapping[str, object], arms: tuple[ArmConfig, ...]
+) -> tuple[tuple[str, str], ...]:
+    arm_names = {arm.name for arm in arms}
+    raw_contrasts = scoring.get("contrasts", [])
+    if not isinstance(raw_contrasts, list):
+        raise ConfigError("scoring.contrasts must be a list")
+    contrasts: list[tuple[str, str]] = []
+    for index, raw in enumerate(raw_contrasts):
+        if not isinstance(raw, list) or len(raw) != 2:
+            raise ConfigError(f"scoring.contrasts[{index}] must contain two arm names")
+        left, right = str(raw[0]), str(raw[1])
+        if left == right or left not in arm_names or right not in arm_names:
+            raise ConfigError(f"scoring.contrasts[{index}] is invalid")
+        if (left, right) in contrasts:
+            raise ConfigError(f"scoring.contrasts[{index}] is duplicated")
+        contrasts.append((left, right))
+    return tuple(contrasts)
+
+
+def _parse_scoring_parameters(scoring: dict[str, object]) -> tuple[float, float]:
+    _keys(
+        scoring,
+        {"implementation", "schema_version"},
+        "scoring",
+        {"confidence_level", "target_margin_of_error", "contrasts"},
+    )
+    if (
+        scoring["implementation"] != "livebench-objective-ground-truth"
+        or scoring["schema_version"] != 2
+    ):
+        raise ConfigError("unsupported scoring contract")
+    confidence = float(scoring.get("confidence_level", 0.95))
+    margin = float(scoring.get("target_margin_of_error", 0.05))
+    if not 0 < confidence < 1:
+        raise ConfigError("scoring.confidence_level must be between 0 and 1")
+    if not 0 < margin < 1:
+        raise ConfigError("scoring.target_margin_of_error must be between 0 and 1")
+    return confidence, margin
+
+
 def parse_config(value: object) -> ExperimentConfig:
     root = _mapping(value, "config")
     _keys(
@@ -281,26 +323,12 @@ def parse_config(value: object) -> ExperimentConfig:
     _keys(compatibility, {"hermes"}, "compatibility")
     hermes_compat = _mapping(compatibility["hermes"], "compatibility.hermes")
     scoring = _mapping(root["scoring"], "scoring")
-    _keys(
-        scoring,
-        {"implementation", "schema_version"},
-        "scoring",
-        {"confidence_level", "target_margin_of_error"},
-    )
-    if (
-        scoring["implementation"] != "livebench-objective-ground-truth"
-        or scoring["schema_version"] != 2
-    ):
-        raise ConfigError("unsupported scoring contract")
-    confidence_level = float(scoring.get("confidence_level", 0.95))
-    target_margin = float(scoring.get("target_margin_of_error", 0.05))
-    if not 0 < confidence_level < 1:
-        raise ConfigError("scoring.confidence_level must be between 0 and 1")
-    if not 0 < target_margin < 1:
-        raise ConfigError("scoring.target_margin_of_error must be between 0 and 1")
+    confidence_level, target_margin = _parse_scoring_parameters(scoring)
     arms = _parse_arms(root["arms"])
+    arm_names = {arm.name for arm in arms}
+    contrasts = _parse_contrasts(scoring, arms)
     baseline = execution["baseline_arm"]
-    if baseline not in {arm.name for arm in arms}:
+    if baseline not in arm_names:
         raise ConfigError("execution.baseline_arm must name an arm")
     config = ExperimentConfig(
         experiment_id=str(experiment["id"]),
@@ -322,7 +350,11 @@ def parse_config(value: object) -> ExperimentConfig:
         ),  # type: ignore[arg-type]
         compatibility=CompatibilityConfig(_parse_hermes_source(hermes_compat)),
         scoring=ScoringContract(
-            "livebench-objective-ground-truth", 2, confidence_level, target_margin
+            "livebench-objective-ground-truth",
+            2,
+            confidence_level,
+            target_margin,
+            tuple(contrasts),
         ),
     )
     validate_balanced_workers(config)

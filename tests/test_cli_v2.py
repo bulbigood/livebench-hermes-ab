@@ -40,7 +40,7 @@ def test_auto_workers_use_five_per_cpu_with_cap(monkeypatch) -> None:
 
 def test_cli_has_only_canonical_commands() -> None:
     commands = parser()._subparsers._group_actions[0].choices
-    assert tuple(commands) == ("prepare", "run", "resume", "score")
+    assert tuple(commands) == ("prepare", "run", "resume", "extend", "score")
 
 
 def test_prepare_has_no_config_field_overrides() -> None:
@@ -58,3 +58,9 @@ def test_credentials_file_is_prepare_only() -> None:
             option for action in commands[name]._actions for option in action.option_strings
         }
         assert "--credentials-file" not in option_strings
+
+
+def test_extend_requires_new_output_and_target_sample_count() -> None:
+    extend = parser()._subparsers._group_actions[0].choices["extend"]
+    options = {option for action in extend._actions for option in action.option_strings}
+    assert {"--run-dir", "--output-run-dir", "--to-samples", "--credentials-file"} <= options

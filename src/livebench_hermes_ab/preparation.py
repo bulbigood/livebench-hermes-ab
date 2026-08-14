@@ -20,6 +20,7 @@ from .workload import Question, build_workload, question_from_record, select_que
 class CellWorkspace:
     def __init__(self, template: Path, cell_root: Path):
         self.home = Path(tempfile.mkdtemp(prefix="cell-", dir=cell_root))
+        self.expected_provider_identities: tuple[tuple[str, str, str], ...] = ()
         shutil.copytree(template, self.home, dirs_exist_ok=True, symlinks=True)
 
     def cleanup(self) -> None:
@@ -50,6 +51,16 @@ class CellWorkspaceFactory:
                 tuple((item["provider"], item["model"]) for item in preset["reference_models"]),
                 (preset["aggregator"]["provider"], preset["aggregator"]["model"]),
             )
+            workspace.expected_provider_identities = tuple(
+                [("reference", item["provider"], item["model"]) for item in preset["reference_models"]]
+                + [("aggregator", preset["aggregator"]["provider"], preset["aggregator"]["model"])]
+            )
+        else:
+            model = config.get("model", {})
+            if isinstance(model, Mapping):
+                workspace.expected_provider_identities = (
+                    ("acting", str(model.get("provider") or "unknown"), str(model.get("default") or "unknown")),
+                )
         return workspace
 
 

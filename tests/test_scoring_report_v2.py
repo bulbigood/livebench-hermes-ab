@@ -275,3 +275,45 @@ def test_scoring_revalidates_persisted_trace_evidence() -> None:
 
     with pytest.raises(Exception, match="failed revalidation"):
         score_run(tampered, {"task": lambda _q, _answer: 1.0})
+
+
+def test_configured_nonbaseline_contrasts_are_scored_and_reported() -> None:
+    import pytest
+
+    arms = ("base", "legacy", "critic")
+    pairs = tuple(f"p{i}" for i in range(1, 6))
+    values = {
+        "base": (0.0, 0.0, 0.0, 0.0, 0.0),
+        "legacy": (0.1, 0.1, 0.1, 0.1, 0.1),
+        "critic": (0.3, 0.3, 0.3, 0.3, 0.3),
+    }
+    outcomes = tuple(
+        ValidOutcome(
+            CellId(arm, pair, "q", index),
+            {"answer": str(values[arm][index - 1])},
+            1.0,
+        )
+        for index, pair in enumerate(pairs, 1)
+        for arm in arms
+    )
+    run = FrozenRun(
+        arms,
+        "base",
+        pairs,
+        outcomes,
+        {"q": QuestionEvidence("math", "task", {})},
+        samples_per_task=5,
+        contrasts=(("critic", "legacy"), ("critic", "base")),
+    )
+    result = score_run(run, {"task": lambda _q, answer: float(answer)})
+    report = render_markdown_report(result)
+    bundle = scoring_bundle(result, report)
+    summary = json.loads(bundle.files[next(p for p in bundle.files if p.name == "summary.json")])
+
+    contrast = summary["planned_contrast_analysis"]["comparisons"]["critic_vs_legacy"]
+    assert contrast["left_arm"] == "critic"
+    assert contrast["right_arm"] == "legacy"
+    assert contrast["observed_mean_delta"] == pytest.approx(0.2)
+    assert contrast["verdict"] == "better"
+    assert "## Planned paired contrasts" in report
+    assert "| critic vs legacy |" in report

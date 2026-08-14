@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import tempfile
 from dataclasses import replace
@@ -15,6 +16,11 @@ from .artifacts import FilesystemArtifactStore
 from .config import ExperimentConfig, load_config
 from .domain import ExclusionCode, HarnessError, IntegrityError
 from .execution import CellRunner, ExecutionService
+from .extension import (
+    extended_config_bytes,
+    import_extension_artifacts,
+    validate_manifest_extension,
+)
 from .hermes import (
     SubprocessHermesRunner,
     materialize_git_source,
@@ -148,6 +154,58 @@ def command_resume(args: argparse.Namespace) -> dict[str, object]:
     return {"status": "complete", "executed_cells": len(plan.cells)}
 
 
+def command_extend(args: argparse.Namespace) -> dict[str, object]:
+    source_run = args.run_dir
+    output_run = args.output_run_dir
+    if output_run.exists():
+        raise IntegrityError(f"extension output already exists: {output_run}")
+    old_manifest, _, _ = _load_frozen(source_run)
+    snapshot = (source_run / "config.snapshot.yaml").read_bytes()
+    extended, old_samples = extended_config_bytes(snapshot, args.to_samples)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", suffix=".yaml", prefix="livebench-extend-", delete=False
+        ) as handle:
+            handle.write(extended)
+            temporary = Path(handle.name)
+        config = load_config(temporary)
+        prepare_args = argparse.Namespace(
+            config=temporary,
+            run_dir=output_run,
+            hermes_executable=args.hermes_executable,
+            credentials_file=args.credentials_file,
+        )
+        command_prepare(prepare_args, config)
+        new_manifest, _, _ = _load_frozen(output_run)
+        validate_manifest_extension(old_manifest, new_manifest)
+        provenance = import_extension_artifacts(
+            source_run,
+            output_run,
+            old_samples=old_samples,
+            new_samples=args.to_samples,
+        )
+        imported_value = provenance["imported_cells"]
+        if not isinstance(imported_value, int):
+            raise IntegrityError("extension imported-cell count is invalid")
+        imported = imported_value
+        return {
+            "status": "prepared",
+            "source_run": str(source_run),
+            "run_dir": str(output_run),
+            "old_samples_per_task": old_samples,
+            "new_samples_per_task": args.to_samples,
+            "imported_cells": imported,
+            "pending_cells": len(new_manifest.cells) - imported,
+        }
+    except BaseException:
+        shutil.rmtree(output_run, ignore_errors=True)
+        raise
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def command_score(args: argparse.Namespace) -> dict[str, object]:
     manifest, raw_questions, store = _load_frozen(args.run_dir)
     config_snapshot = (args.run_dir / "config.snapshot.yaml").read_text()
@@ -175,6 +233,8 @@ def command_score(args: argparse.Namespace) -> dict[str, object]:
             samples_per_task=samples_per_task,
             confidence_level=frozen_config.scoring.confidence_level,
             target_margin_of_error=frozen_config.scoring.target_margin_of_error,
+            contrasts=frozen_config.scoring.contrasts,
+            attempts=store.load_attempt_outcomes(),
         ),
         registry({q.task for q in questions.values()}),
     )
@@ -233,10 +293,10 @@ def parser() -> argparse.ArgumentParser:
         help="pipeline dotenv secret source; defaults to $HERMES_HOME/.env",
     )
     commands = value.add_subparsers(dest="command")
-    for name in ("prepare", "run", "resume", "score"):
+    for name in ("prepare", "run", "resume", "extend", "score"):
         command = commands.add_parser(name)
         command.add_argument("--run-dir", type=Path, required=True)
-        if name == "prepare":
+        if name in {"prepare", "extend"}:
             command.add_argument(
                 "--credentials-file",
                 type=Path,
@@ -244,6 +304,9 @@ def parser() -> argparse.ArgumentParser:
             )
         if name == "resume":
             command.add_argument("--retry-excluded", action="store_true")
+        if name == "extend":
+            command.add_argument("--output-run-dir", type=Path, required=True)
+            command.add_argument("--to-samples", type=int, required=True)
     return value
 
 
@@ -260,6 +323,7 @@ def main() -> None:
             "prepare": lambda: command_prepare(args, config),
             "run": lambda: command_run(args),
             "resume": lambda: command_resume(args),
+            "extend": lambda: command_extend(args),
             "score": lambda: command_score(args),
         }[args.command]
         print(json.dumps(handler(), indent=2, ensure_ascii=False))
