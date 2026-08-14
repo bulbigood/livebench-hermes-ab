@@ -51,7 +51,7 @@ The first three comparisons are the frozen arm-versus-baseline questions. The fi
 - The structured critic rubric has no demonstrated incremental value over neutral framing.
 - Family effects remain heterogeneous: versus base, critic is −0.0331 on olympiad, −0.0139 on tablejoin, +0.2500 on the single CTA scenario, −0.0526 on math competition, and +0.0300 on paraphrase.
 - Neutral is slightly stronger on tablejoin (+0.0075) and weaker on olympiad (−0.0423); these shifts do not create an overall advantage.
-- MoA mean latency is 3.8–3.9× the corrected base mean. There is no quality evidence here that justifies that default cost.
+- MoA mean latency is 3.8–3.9× the corrected base mean. There is no quality evidence here that justifies that default latency penalty.
 - The operational reliability asymmetry remains important: base surfaced 32 failures while the MoA paths did not. That is a transport/retry finding, not evidence that MoA reasoning improved answers.
 
 Corrected scoring generation: `ba4b67a5f0c743ab8158bf86af0982eb`.
