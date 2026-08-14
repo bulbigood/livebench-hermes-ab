@@ -87,4 +87,4 @@ See [configuration](docs/configuration.md), [technical reference](docs/technical
 
 ## Evaluation results
 
-- [Latest evaluation: v14 confirmatory cohort, 2026-08-13](docs/evals/results/2026-08-13-full-paid-v14-confirmatory.md)
+- [Latest evaluation: MoA critic/wrapper paid pilot, 15×20, 2026-08-14](docs/evals/results/2026-08-14-moa-prompt-pilot-15x20.md)

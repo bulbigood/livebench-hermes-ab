@@ -238,10 +238,13 @@ def _validate_presets(name: str, moa: dict[str, object]) -> None:
             "aggregator",
         },
         f"arms.{name}.hermes.moa.presets.{active}",
+        {"advisory_prompt"},
     )
     aggregator = _mapping(preset["aggregator"], f"arms.{name}.aggregator")
     _keys(aggregator, {"provider", "model", "reasoning_effort"}, f"arms.{name}.aggregator")
     references = preset["reference_models"]
+    if preset.get("advisory_prompt", "critic") not in {"legacy", "critic", "neutral"}:
+        raise ConfigError(f"arms.{name}.advisory_prompt must be legacy, critic, or neutral")
     if not isinstance(references, list) or not references:
         raise ConfigError(f"arms.{name} requires reference models")
     for index, raw in enumerate(references):

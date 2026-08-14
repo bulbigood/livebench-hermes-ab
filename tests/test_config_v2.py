@@ -119,6 +119,18 @@ def test_unknown_nested_arm_key_fails_closed() -> None:
         parse_config(value)
 
 
+def test_moa_advisory_prompt_selector_is_strict() -> None:
+    import yaml
+
+    value = yaml.safe_load(Path("config.yaml").read_text())
+    preset = value["arms"]["moa_mimo"]["hermes"]["moa"]["presets"]["default"]
+    preset["advisory_prompt"] = "critic"
+    assert parse_config(value).arms[1].hermes["moa"]["presets"]["default"]["advisory_prompt"] == "critic"
+    preset["advisory_prompt"] = "invented"
+    with pytest.raises(ConfigError, match="advisory_prompt"):
+        parse_config(value)
+
+
 def test_balanced_workers_must_be_explicit_multiple_of_arm_count() -> None:
     import yaml
 

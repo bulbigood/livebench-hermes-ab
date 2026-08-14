@@ -432,6 +432,7 @@ def timing_statistics(result: ScoringResult) -> dict[str, object]:
 def paired_decision_analysis(result: ScoringResult) -> dict[str, object]:
     confidence_level = 0.95
     power = 0.95
+    catastrophic_harm_threshold = -0.5
     alpha = 1.0 - confidence_level
     z_alpha = statistics.NormalDist().inv_cdf(1.0 - alpha / 2.0)
     z_power = statistics.NormalDist().inv_cdf(power)
@@ -449,6 +450,10 @@ def paired_decision_analysis(result: ScoringResult) -> dict[str, object]:
             for row in result.rows if row.arm == arm
         ]
         observations = len(differences)
+        harm_count = sum(difference < 0 for difference in differences)
+        catastrophic_harm_count = sum(
+            difference <= catastrophic_harm_threshold for difference in differences
+        )
         mean = statistics.fmean(differences)
         deviation = statistics.stdev(differences) if observations >= 2 else None
         standard_error = deviation / math.sqrt(observations) if deviation is not None else None
@@ -470,6 +475,11 @@ def paired_decision_analysis(result: ScoringResult) -> dict[str, object]:
             "power": power,
             "two_sided_alpha": alpha,
             "observations": observations,
+            "harm_count": harm_count,
+            "harm_rate": harm_count / observations,
+            "catastrophic_harm_threshold": catastrophic_harm_threshold,
+            "catastrophic_harm_count": catastrophic_harm_count,
+            "catastrophic_harm_rate": catastrophic_harm_count / observations,
             "observed_mean_delta": mean,
             "sample_standard_deviation": deviation,
             "standard_error": standard_error,

@@ -70,7 +70,7 @@ def test_report_pairs_mean_with_median_and_embeds_frozen_config_provenance() -> 
     for header in headers:
         assert ("Mean" in header) == ("Median" in header), header
     assert "| Arm | Mean | Median |" in report
-    assert "| Candidate vs baseline | n | Mean delta | Median delta | 95% CI |" in report
+    assert "| Candidate vs baseline | n | Mean delta | Median delta | Harm rate | Catastrophic harm rate | 95% CI |" in report
     assert "Hermes source: `https://example.test/hermes.git @ 0123456789012345678901234567890123456789`" in report
     assert "Observed Hermes: `Hermes Agent v0.20.1`" in report
     assert "<details>" in report
@@ -131,11 +131,18 @@ def test_report_includes_variance_confidence_interval_and_sample_recommendation(
     assert decision["confidence_level"] == 0.95
     assert decision["power"] == 0.95
     assert decision["verdict"] == "inconclusive"
+    assert decision["harm_count"] == 1
+    assert decision["harm_rate"] == 0.2
+    assert decision["catastrophic_harm_threshold"] == -0.5
+    assert decision["catastrophic_harm_count"] == 1
+    assert decision["catastrophic_harm_rate"] == 0.2
     assert decision["required_total_pairs_for_projected_ci_excluding_zero"] is not None
     assert decision["required_samples_per_scenario_for_projected_ci_excluding_zero"] is not None
     assert decision["required_total_pairs_for_95_percent_power"] is not None
     assert decision["required_samples_per_scenario_for_95_percent_power"] is not None
     assert "## Paired better/worse decision analysis" in report
+    assert "| candidate vs base | 5 | 0.1000 | 0.0000 | 20.0% | 20.0% |" in report
+    assert "Catastrophic harm means a paired score delta `<= -0.5`." in report
     assert "95% power samples/scenario" in report
 
 

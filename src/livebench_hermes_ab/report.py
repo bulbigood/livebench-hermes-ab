@@ -106,9 +106,10 @@ def _paired_decision_analysis(result: ScoringResult) -> list[str]:
         "## Paired better/worse decision analysis",
         "",
         "The verdict uses a two-sided 95% confidence interval for common-valid paired score differences. Sample projections assume the observed effect and paired-difference variance persist; they are planning estimates, not guarantees.",
+        "Catastrophic harm means a paired score delta `<= -0.5`.",
         "",
-        "| Candidate vs baseline | n | Mean delta | Median delta | 95% CI | Verdict | Projected CI-excluding-zero samples/scenario | 95% power samples/scenario |",
-        "|---|---:|---:|---:|---:|---|---:|---:|",
+        "| Candidate vs baseline | n | Mean delta | Median delta | Harm rate | Catastrophic harm rate | 95% CI | Verdict | Projected CI-excluding-zero samples/scenario | 95% power samples/scenario |",
+        "|---|---:|---:|---:|---:|---:|---:|---|---:|---:|",
     ]
     for arm, item in comparisons.items():
         assert isinstance(item, dict)
@@ -123,6 +124,8 @@ def _paired_decision_analysis(result: ScoringResult) -> list[str]:
         lines.append(
             f"| {arm} vs {result.baseline_arm} | {item['observations']} | "
             f"{float(item['observed_mean_delta']):.4f} | {median_delta:.4f} | "
+            f"{float(item['harm_rate']):.1%} | "
+            f"{float(item['catastrophic_harm_rate']):.1%} | "
             f"{rendered_interval} | {item['verdict']} | "
             f"{'Unavailable' if projected is None else projected} | "
             f"{'Unavailable' if powered is None else powered} |"
