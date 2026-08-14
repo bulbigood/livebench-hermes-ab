@@ -629,7 +629,12 @@ def planned_contrast_analysis(result: ScoringResult) -> dict[str, object]:
 
 
 def missing_data_sensitivity(result: ScoringResult) -> dict[str, object]:
-    analysis = planned_contrast_analysis(result)
+    contrasts = result.contrasts or tuple(
+        (arm, result.baseline_arm)
+        for arm in result.arm_order
+        if arm != result.baseline_arm
+    )
+    analysis = _paired_analysis(result, contrasts)
     comparisons = analysis["comparisons"]
     assert isinstance(comparisons, dict)
     bounds: dict[str, object] = {}

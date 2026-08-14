@@ -99,6 +99,7 @@ def test_missing_frozen_scenario_reports_zero_common_coverage() -> None:
     assert result.minimum_common_samples_per_task == 0
     assert result.scenario_coverage == {"q1": 1, "q2": 0}
     assert "| cat | task | base | 0 | — | — | — | q2 |" in report
+    assert "| candidate_vs_base | 1 | 1 | [-0.5000, 0.5000] |" in report
 
 
 def test_report_pairs_mean_with_median_and_embeds_frozen_config_provenance() -> None:

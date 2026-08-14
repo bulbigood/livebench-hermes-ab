@@ -1,82 +1,67 @@
-# Hermes MoA critic/wrapper paid pilot — 15 scenarios × 20 samples
+# LiveBench Hermes experiment
 
-Common paired coverage: 294/300
+## Corrected executive conclusion
+
+This report supersedes the earlier calculation from the same immutable four-arm run. The earlier scorer accepted 32 terminal `base` provider failures as model answers because Hermes exited with code `0`. The corrected scorer excludes them before forming the common-valid cohort.
+
+Common paired coverage: 263/300
+
+The corrected complete-case ordering is `base ≈ moa_neutral ≈ moa_critic > moa_legacy`. Critic and neutral no longer outperform `base`; the old uplift was driven by invalid failure strings in the baseline. Both wrapper arms remain better than legacy, while critic and neutral remain indistinguishable.
+
+These are conditional diagnostic estimates, not a balanced confirmatory result. Failures are scenario-dependent: the minimum retained count is 2/20, and worst-case bounds for all missing pairs include zero. The CIs below describe only the 263 pairs where all four arms returned valid outputs.
+
+| Arm | Mean | Median | Mean wall time |
+|---|---:|---:|---:|
+| `base` | 0.8627 | 0.9355 | 37.3 s |
+| `moa_legacy` | 0.8091 | 0.9167 | 146.1 s |
+| `moa_critic` | 0.8618 | 0.9167 | 140.7 s |
+| `moa_neutral` | 0.8625 | 0.9167 | 141.4 s |
+
+### Complete-case pairwise analysis
+
+The first three comparisons are the frozen arm-versus-baseline questions. The final three are exploratory sidecar contrasts computed from the same corrected score rows.
+
+| Contrast | Mean delta | 95% CI | Harm | Catastrophic harm | Worst-case missing-data bounds |
+|---|---:|---:|---:|---:|---:|
+| Legacy−base | −0.0536 | [−0.0803, −0.0269] | 29.7% | 4.9% | [−0.1703, +0.0763] |
+| Critic−base | −0.0009 | [−0.0259, +0.0241] | 26.6% | 2.7% | [−0.1241, +0.1226] |
+| Neutral−base | −0.0002 | [−0.0233, +0.0229] | 25.1% | 0.8% | [−0.1235, +0.1232] |
+| Critic−legacy | +0.0527 | [+0.0228, +0.0827] | 20.2% | 2.7% | [−0.0771, +0.1696] |
+| Critic−neutral | −0.0007 | [−0.0271, +0.0257] | 20.9% | 3.0% | [−0.1239, +0.1227] |
+| Neutral−legacy | +0.0534 | [+0.0270, +0.0798] | 19.0% | 0.8% | [−0.0765, +0.1702] |
+
+### What changed
+
+| Metric | Earlier report | Corrected complete-case report |
+|---|---:|---:|
+| Common-valid pairs | 294/300 | 263/300 |
+| `base` mean | 0.7740 | 0.8627 |
+| `moa_legacy` mean | 0.8056 | 0.8091 |
+| `moa_critic` mean | 0.8624 | 0.8618 |
+| `moa_neutral` mean | 0.8603 | 0.8625 |
+| Legacy−base | +0.0316 | −0.0536 |
+| Critic−base | +0.0885 | −0.0009 |
+| Neutral−base | +0.0863 | −0.0002 |
+| Critic−legacy | +0.0569 | +0.0527 |
+| Critic−neutral | +0.0021 | −0.0007 |
+
+### Interpretation
+
+- The untrusted wrapper repairs most of the degradation seen in legacy MoA, but does not improve quality over a successful plain call on this surviving cohort.
+- The structured critic rubric has no demonstrated incremental value over neutral framing.
+- Family effects remain heterogeneous: versus base, critic is −0.0331 on olympiad, −0.0139 on tablejoin, +0.2500 on the single CTA scenario, −0.0526 on math competition, and +0.0300 on paraphrase.
+- Neutral is slightly stronger on tablejoin (+0.0075) and weaker on olympiad (−0.0423); these shifts do not create an overall advantage.
+- MoA mean latency is 3.8–3.9× the corrected base mean. There is no quality evidence here that justifies that default cost.
+- The operational reliability asymmetry remains important: base surfaced 32 failures while the MoA paths did not. That is a transport/retry finding, not evidence that MoA reasoning improved answers.
+
+Corrected scoring generation: `ba4b67a5f0c743ab8158bf86af0982eb`.
 
 | Arm | Mean | Median |
 |---|---:|---:|
-| base | 0.7740 | 0.9167 |
-| moa_legacy | 0.8056 | 0.9100 |
-| moa_critic | 0.8624 | 0.9167 |
-| moa_neutral | 0.8603 | 0.9167 |
-
-## Executive conclusion
-
-The prompt-only intervention succeeded as a **combined wrapper/reference-framing change**, but this experiment does not identify the critic rubric as the cause.
-
-- `moa_critic − base`: **+0.0885**, 95% CI **[+0.0510, +0.1259]**; harm rate **23.8%**; catastrophic-harm rate **2.4%**.
-- `moa_neutral − base`: **+0.0863**, 95% CI **[+0.0505, +0.1221]**; harm rate **22.4%**; catastrophic-harm rate **0.7%**.
-- `moa_legacy − base`: **+0.0316**, 95% CI **[-0.0061, +0.0693]**; inconclusive.
-- Direct `critic − legacy`: **+0.0569**, 95% CI **[+0.0294, +0.0844]**.
-- Direct `critic − neutral`: **+0.0021**, 95% CI **[-0.0223, +0.0266]**.
-
-The improvement is stable from 10 to 20 samples: the critic delta moved from `+0.0816` to `+0.0885`, while its CI remained strictly above zero. The neutral arm remained essentially tied with critic. The strongest supported interpretation is therefore:
-
-> Treating reference output as untrusted advisory data and preventing acting-agent role confusion materially improves this cohort. The additional structured critic rubric has no demonstrated incremental benefit over neutral non-acting framing.
-
-This is a selection/mechanism cohort assembled from known failures, not an independent held-out confirmation. Do not present the result as general MoA superiority.
-
-## Decision against the pre-registered success criteria
-
-| Criterion | Result |
-|---|---|
-| Non-negative paired quality vs base | **Pass**: critic CI is entirely positive |
-| Lower harm than legacy | **Pass descriptively**: 23.8% vs 26.5% |
-| Lower catastrophic harm than legacy | **Pass descriptively**: 2.4% vs 4.4% |
-| Structural/mechanism improvement | **Not established**: scenario scores improved, but claim-level adoption was not retained |
-| References still contribute useful information | **Not established**: critic and neutral are statistically indistinguishable |
-| Acceptable latency/cost | **Trade-off**: materially slower than base; reference spend remained modest |
-
-The proper product decision is to retain the untrusted aggregator wrapper, keep `legacy` as a rollback/control mode, and treat the critic format as provisional until a held-out trace-retaining experiment separates it from neutral framing.
-
-## Comparison with the frozen v14 result
-
-The previous v14 confirmatory report used the same 15 scenarios and 20 samples but only compared base with legacy MiMo MoA. It found `moa_mimo − base = -0.0105`, 95% CI `[-0.0503, +0.0292]`, with tablejoin `−0.0908` and CTA `−0.3000` by family/scenario.
-
-In this run:
-
-- critic improved overall quality by `+0.0885` versus base;
-- critic improved olympiad by `+0.1689` and CTA by `+0.2500`;
-- critic tablejoin was approximately flat/slightly negative at `−0.0139` rather than v14's `−0.0908`;
-- the within-run critic-versus-legacy comparison was positive, reducing reliance on cross-run comparisons.
-
-CTA remains a floor sentinel: its positive movement is useful evidence against the specific legacy failure, not evidence that the underdetermined label problem has been solved generally.
-
-## Reliability, tokens, cost, and trace limitation
-
-- Planned pairs: **300**; common-valid pairs: **294** (**98.0%** coverage).
-- Valid MoA traces: **894**; invalid traces: **6** (**0.67%** of 900 expected reference traces). Each MoA arm had two invalid traces.
-- Reference tokens: **971,282 input** and **11,500,219 output**.
-- At the observed OpenRouter list prices used for planning (`$0.14/M` input and `$0.28/M` output), estimated reference-model spend is approximately **$3.36**. Aggregator billing is separate and was not exposed by the harness, so this is not a total-cost claim.
-- Mean wall time was **62.3 s** for base, **162.7 s** for legacy, **158.8 s** for critic, and **159.9 s** for neutral. The prompt change does not remove MoA's roughly 2.5× mean latency relative to base.
-- The run preserves answers, objective scores, timing, usage summaries, and invalid-trace diagnostics. It does **not** preserve full valid reference blocks. Consequently, erroneous-claim copying, useful-claim adoption, candidate correctness, and underdetermination-detection rates cannot be reconstructed honestly from these artifacts.
-
-That missing trace retention is the principal evidence gap. Before an independent confirmation, the harness should retain redacted valid reference and aggregator blocks as immutable artifacts.
-
-### Paid usage ledger
-
-The 15×20 row already includes the original samples 1–10; the 15×10 directory is therefore not added again. The smoke was a separate paid run. Counts below are persisted valid-reference usage records, not inferred call maxima.
-
-| Stage | Arm | Recorded reference calls | Input tokens | Output tokens | Total tokens | Recorded cost field |
-|---|---|---:|---:|---:|---:|---:|
-| Smoke 15×1 | Legacy | 15 | 1,129 | 226,889 | 228,018 | $0.0637825104 |
-| Smoke 15×1 | Critic | 15 | 34,835 | 246,730 | 281,565 | $0.0739642176 |
-| Smoke 15×1 | Neutral | 15 | 30,184 | 244,420 | 274,604 | $0.0726648104 |
-| Selection 15×20 | Legacy | 298 | 289,346 | 3,956,983 | 4,246,329 | $1.1495649480 |
-| Selection 15×20 | Critic | 298 | 350,202 | 3,792,012 | 4,142,214 | $1.1117506512 |
-| Selection 15×20 | Neutral | 298 | 331,734 | 3,751,224 | 4,082,958 | $1.0975109544 |
-| **Paid total recorded** | **All reference arms** | **939** | **1,037,430** | **12,218,258** | **13,255,688** | **$3.5692380920** |
-
-Every persisted `cost_usd` value has `cost_status: estimated` and `cost_source: provider_models_api`. Thus `$3.5692380920` is the exact sum of the recorded estimate fields, **not** an exact provider-billed total. Six invalid selection traces consumed calls but did not preserve usage, and OpenAI Codex aggregator usage/cost was not recorded. The current artifacts therefore cannot establish exact all-provider spend or total tokens. A future run should persist provider generation IDs, billed cost when available, aggregator usage, failed-call usage, and retry usage.
+| base | 0.8627 | 0.9355 |
+| moa_legacy | 0.8091 | 0.9167 |
+| moa_critic | 0.8618 | 0.9167 |
+| moa_neutral | 0.8625 | 0.9167 |
 
 ## Run provenance
 
@@ -208,12 +193,15 @@ scoring:
 ## Exclusions
 
 - INVALID_MOA_TRACE: 6
+- MODEL_OR_PROVIDER_FAILURE: 32
 
 ## Sampling
 
 | Configured samples/task | Minimum common-valid samples/task | Recommended samples/task |
 |---:|---:|---:|
-| 20 | 19 | 20 |
+| 20 | 2 | Unavailable |
+
+> WARNING: fewer than 5 common-valid samples per task; variance-based planning estimates are unstable.
 
 ## Paired better/worse decision analysis
 
@@ -222,9 +210,19 @@ Catastrophic harm means a paired score delta `<= -0.5`.
 
 | Candidate vs baseline | n | Mean delta | Median delta | Harm rate | Catastrophic harm rate | 95% CI | Verdict | Projected CI-excluding-zero samples/scenario | 95% power samples/scenario |
 |---|---:|---:|---:|---:|---:|---:|---|---:|---:|
-| moa_legacy vs base | 294 | 0.0316 | 0.0000 | 26.5% | 4.4% | [-0.0061, 0.0693] | inconclusive | 28 | 95 |
-| moa_critic vs base | 294 | 0.0885 | 0.0000 | 23.8% | 2.4% | [0.0510, 0.1259] | better | 4 | 12 |
-| moa_neutral vs base | 294 | 0.0863 | 0.0000 | 22.4% | 0.7% | [0.0505, 0.1221] | better | 4 | 12 |
+| moa_legacy vs base | 263 | -0.0536 | 0.0000 | 29.7% | 4.9% | [-0.0803, -0.0269] | worse | 5 | 15 |
+| moa_critic vs base | 263 | -0.0009 | 0.0000 | 26.6% | 2.7% | [-0.0259, 0.0241] | inconclusive | 14526 | 49137 |
+| moa_neutral vs base | 263 | -0.0002 | 0.0000 | 25.1% | 0.8% | [-0.0233, 0.0229] | inconclusive | 297078 | 1004942 |
+
+## Missing-data sensitivity
+
+The score and confidence-interval tables above are complete-case estimates conditional on every arm returning a valid output. Missingness is not assumed random. The bounds below assign every missing paired delta its worst possible value under the stated `[0, 1]` score range.
+
+| Contrast | Observed pairs | Missing pairs | Worst-case mean-delta bounds |
+|---|---:|---:|---:|
+| moa_legacy_vs_base | 263 | 37 | [-0.1703, 0.0763] |
+| moa_critic_vs_base | 263 | 37 | [-0.1241, 0.1226] |
+| moa_neutral_vs_base | 263 | 37 | [-0.1235, 0.1232] |
 
 ## Score by scenario
 
@@ -234,10 +232,10 @@ Catastrophic harm means a paired score delta `<= -0.5`.
 | math | olympiad | moa_legacy | 19 | 0.7674 | 0.8710 | 0.9677 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
 | math | olympiad | moa_critic | 19 | 0.8565 | 0.8710 | 0.9710 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
 | math | olympiad | moa_neutral | 19 | 0.8268 | 0.8548 | 0.9048 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
-| math | olympiad | base | 19 | 0.1243 | 0.0213 | 1.0000 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
-| math | olympiad | moa_legacy | 19 | 0.7111 | 0.7234 | 0.9574 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
-| math | olympiad | moa_critic | 19 | 0.8555 | 0.8723 | 1.0000 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
-| math | olympiad | moa_neutral | 19 | 0.8410 | 0.8723 | 0.9809 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | base | 2 | 1.0000 | 1.0000 | 1.0000 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_legacy | 2 | 0.6489 | 0.6489 | 0.7160 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_critic | 2 | 0.9255 | 0.9255 | 0.9926 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_neutral | 2 | 0.8404 | 0.8404 | 0.8500 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
 | math | olympiad | base | 20 | 0.8726 | 0.8710 | 0.9355 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
 | math | olympiad | moa_legacy | 20 | 0.6847 | 0.7661 | 0.9371 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
 | math | olympiad | moa_critic | 20 | 0.8290 | 0.8306 | 0.8895 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
@@ -258,10 +256,10 @@ Catastrophic harm means a paired score delta `<= -0.5`.
 | data_analysis | tablejoin | moa_legacy | 20 | 0.9945 | 1.0000 | 1.0000 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
 | data_analysis | tablejoin | moa_critic | 20 | 0.9030 | 1.0000 | 1.0000 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
 | data_analysis | tablejoin | moa_neutral | 20 | 0.9195 | 1.0000 | 1.0000 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
-| math | olympiad | base | 19 | 0.2788 | 0.0213 | 1.0000 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
-| math | olympiad | moa_legacy | 19 | 0.8477 | 0.8936 | 1.0000 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
-| math | olympiad | moa_critic | 19 | 0.8723 | 0.9362 | 1.0000 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
-| math | olympiad | moa_neutral | 19 | 0.8511 | 0.8723 | 0.9809 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | base | 5 | 1.0000 | 1.0000 | 1.0000 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_legacy | 5 | 0.8553 | 0.9149 | 0.9830 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_critic | 5 | 0.8170 | 0.8298 | 0.9191 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_neutral | 5 | 0.8766 | 0.8723 | 0.9234 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
 | instruction_following | paraphrase | base | 20 | 0.9700 | 1.0000 | 1.0000 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
 | instruction_following | paraphrase | moa_legacy | 20 | 1.0000 | 1.0000 | 1.0000 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
 | instruction_following | paraphrase | moa_critic | 20 | 1.0000 | 1.0000 | 1.0000 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
@@ -300,9 +298,9 @@ Positive values favor the candidate over `base`.
 | math | olympiad | moa_legacy−base | 19 | -0.1358 | -0.0645 | 0.0645 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
 | math | olympiad | moa_critic−base | 19 | -0.0467 | -0.0323 | 0.0677 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
 | math | olympiad | moa_neutral−base | 19 | -0.0764 | -0.0645 | 0.0177 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
-| math | olympiad | moa_legacy−base | 19 | 0.5868 | 0.6170 | 0.9362 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
-| math | olympiad | moa_critic−base | 19 | 0.7312 | 0.8511 | 0.9404 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
-| math | olympiad | moa_neutral−base | 19 | 0.7167 | 0.8511 | 0.9596 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_legacy−base | 2 | -0.3511 | -0.3511 | -0.2840 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_critic−base | 2 | -0.0745 | -0.0745 | -0.0074 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_neutral−base | 2 | -0.1596 | -0.1596 | -0.1500 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
 | math | olympiad | moa_legacy−base | 20 | -0.1879 | -0.0806 | 0.0661 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
 | math | olympiad | moa_critic−base | 20 | -0.0435 | -0.0323 | 0.0492 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
 | math | olympiad | moa_neutral−base | 20 | -0.0492 | -0.0565 | 0.0661 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
@@ -318,9 +316,9 @@ Positive values favor the candidate over `base`.
 | data_analysis | tablejoin | moa_legacy−base | 20 | 0.0835 | 0.0000 | 0.5030 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
 | data_analysis | tablejoin | moa_critic−base | 20 | -0.0080 | 0.0000 | 0.5030 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
 | data_analysis | tablejoin | moa_neutral−base | 20 | 0.0085 | 0.0000 | 0.5030 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
-| math | olympiad | moa_legacy−base | 19 | 0.5689 | 0.8085 | 0.9787 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
-| math | olympiad | moa_critic−base | 19 | 0.5935 | 0.8511 | 0.9787 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
-| math | olympiad | moa_neutral−base | 19 | 0.5722 | 0.8298 | 0.9596 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_legacy−base | 5 | -0.1447 | -0.0851 | -0.0170 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_critic−base | 5 | -0.1830 | -0.1702 | -0.0809 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_neutral−base | 5 | -0.1234 | -0.1277 | -0.0766 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
 | instruction_following | paraphrase | moa_legacy−base | 20 | 0.0300 | 0.0000 | 0.0300 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
 | instruction_following | paraphrase | moa_critic−base | 20 | 0.0300 | 0.0000 | 0.0300 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
 | instruction_following | paraphrase | moa_neutral−base | 20 | 0.0300 | 0.0000 | 0.0300 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
@@ -355,10 +353,10 @@ Positive values favor the candidate over `base`.
 | math_comp | 1 | moa_legacy | 19 | 1.0000 | 1.0000 | 1.0000 |
 | math_comp | 1 | moa_critic | 19 | 0.9474 | 1.0000 | 1.0000 |
 | math_comp | 1 | moa_neutral | 19 | 1.0000 | 1.0000 | 1.0000 |
-| olympiad | 7 | base | 135 | 0.7076 | 0.9032 | 1.0000 |
-| olympiad | 7 | moa_legacy | 135 | 0.8093 | 0.8710 | 1.0000 |
-| olympiad | 7 | moa_critic | 135 | 0.8765 | 0.8750 | 1.0000 |
-| olympiad | 7 | moa_neutral | 135 | 0.8634 | 0.8750 | 1.0000 |
+| olympiad | 7 | base | 104 | 0.9122 | 0.9167 | 1.0000 |
+| olympiad | 7 | moa_legacy | 104 | 0.8194 | 0.8750 | 1.0000 |
+| olympiad | 7 | moa_critic | 104 | 0.8792 | 0.8750 | 1.0000 |
+| olympiad | 7 | moa_neutral | 104 | 0.8699 | 0.8750 | 1.0000 |
 | paraphrase | 1 | base | 20 | 0.9700 | 1.0000 | 1.0000 |
 | paraphrase | 1 | moa_legacy | 20 | 1.0000 | 1.0000 | 1.0000 |
 | paraphrase | 1 | moa_critic | 20 | 1.0000 | 1.0000 | 1.0000 |
@@ -380,9 +378,9 @@ Positive values favor the candidate over `base`.
 | math_comp | 1 | moa_legacy−base | 19 | 0.0000 | 0.0000 | 0.0000 |
 | math_comp | 1 | moa_critic−base | 19 | -0.0526 | 0.0000 | 0.0000 |
 | math_comp | 1 | moa_neutral−base | 19 | 0.0000 | 0.0000 | 0.0000 |
-| olympiad | 7 | moa_legacy−base | 135 | 0.1017 | 0.0000 | 0.9149 |
-| olympiad | 7 | moa_critic−base | 135 | 0.1689 | 0.0000 | 0.9362 |
-| olympiad | 7 | moa_neutral−base | 135 | 0.1558 | 0.0000 | 0.8936 |
+| olympiad | 7 | moa_legacy−base | 104 | -0.0928 | -0.0323 | 0.0623 |
+| olympiad | 7 | moa_critic−base | 104 | -0.0331 | -0.0250 | 0.0645 |
+| olympiad | 7 | moa_neutral−base | 104 | -0.0423 | -0.0250 | 0.0645 |
 | paraphrase | 1 | moa_legacy−base | 20 | 0.0300 | 0.0000 | 0.0300 |
 | paraphrase | 1 | moa_critic−base | 20 | 0.0300 | 0.0000 | 0.0300 |
 | paraphrase | 1 | moa_neutral−base | 20 | 0.0300 | 0.0000 | 0.0300 |
@@ -396,10 +394,10 @@ Common-valid paired cells; values are seconds.
 
 | Arm | n | Mean | Median | p95 |
 |---|---:|---:|---:|---:|
-| base | 294 | 62.3024 | 26.6589 | 279.7177 |
-| moa_legacy | 294 | 162.7214 | 93.5921 | 435.9292 |
-| moa_critic | 294 | 158.7606 | 93.9110 | 405.4153 |
-| moa_neutral | 294 | 159.8823 | 68.2960 | 515.4462 |
+| base | 263 | 37.2883 | 22.2209 | 88.4362 |
+| moa_legacy | 263 | 146.1099 | 76.7752 | 411.0736 |
+| moa_critic | 263 | 140.6849 | 84.7199 | 378.1423 |
+| moa_neutral | 263 | 141.3812 | 56.2807 | 479.4243 |
 
 ### Paired overall wall-time deltas
 
@@ -407,9 +405,9 @@ Positive values mean the candidate is slower than `base`.
 
 | Comparison | n | Mean Δ | Median Δ | p95 Δ |
 |---|---:|---:|---:|---:|
-| moa_legacy−base | 294 | 100.4190 | 51.6692 | 335.3044 |
-| moa_critic−base | 294 | 96.4582 | 54.1555 | 313.0556 |
-| moa_neutral−base | 294 | 97.5799 | 41.4657 | 423.1074 |
+| moa_legacy−base | 263 | 108.8216 | 53.8651 | 337.6681 |
+| moa_critic−base | 263 | 103.3966 | 60.2733 | 314.8653 |
+| moa_neutral−base | 263 | 104.0929 | 39.8877 | 434.6664 |
 
 ## Wall time by scenario
 
@@ -419,10 +417,10 @@ Positive values mean the candidate is slower than `base`.
 | math | olympiad | moa_legacy | 19 | 297.7336 | 289.7643 | 592.8112 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
 | math | olympiad | moa_critic | 19 | 297.8263 | 285.4803 | 627.0514 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
 | math | olympiad | moa_neutral | 19 | 271.6576 | 292.6967 | 442.1009 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
-| math | olympiad | base | 19 | 266.1143 | 279.4215 | 281.4790 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
-| math | olympiad | moa_legacy | 19 | 301.5984 | 313.9196 | 402.8904 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
-| math | olympiad | moa_critic | 19 | 304.6954 | 306.8670 | 588.3785 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
-| math | olympiad | moa_neutral | 19 | 359.2427 | 341.5880 | 653.2338 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | base | 2 | 179.8292 | 179.8292 | 261.5986 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_legacy | 2 | 374.6296 | 374.6296 | 489.6538 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_critic | 2 | 256.6259 | 256.6259 | 262.0063 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_neutral | 2 | 364.6689 | 364.6689 | 394.4202 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
 | math | olympiad | base | 20 | 95.8706 | 85.5549 | 171.3173 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
 | math | olympiad | moa_legacy | 20 | 262.1212 | 253.7305 | 553.5901 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
 | math | olympiad | moa_critic | 20 | 229.2892 | 264.1171 | 349.6143 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
@@ -443,10 +441,10 @@ Positive values mean the candidate is slower than `base`.
 | data_analysis | tablejoin | moa_legacy | 20 | 63.4390 | 63.2584 | 98.7746 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
 | data_analysis | tablejoin | moa_critic | 20 | 63.7669 | 61.9681 | 121.3073 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
 | data_analysis | tablejoin | moa_neutral | 20 | 47.3916 | 33.6838 | 94.9725 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
-| math | olympiad | base | 19 | 242.6491 | 279.4538 | 280.8152 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
-| math | olympiad | moa_legacy | 19 | 318.0213 | 314.6512 | 557.5521 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
-| math | olympiad | moa_critic | 19 | 310.4562 | 316.1320 | 567.6904 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
-| math | olympiad | moa_neutral | 19 | 258.8486 | 295.0594 | 437.2614 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | base | 5 | 159.3567 | 170.9898 | 258.3077 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_legacy | 5 | 322.0681 | 317.1889 | 440.8859 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_critic | 5 | 299.8301 | 331.8757 | 384.6398 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_neutral | 5 | 238.4536 | 277.0431 | 334.0956 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
 | instruction_following | paraphrase | base | 20 | 16.1366 | 16.2493 | 17.7710 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
 | instruction_following | paraphrase | moa_legacy | 20 | 30.3191 | 28.2156 | 40.6905 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
 | instruction_following | paraphrase | moa_critic | 20 | 35.7037 | 30.3522 | 55.7109 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
@@ -485,9 +483,9 @@ Positive values mean the candidate is slower than `base`.
 | math | olympiad | moa_legacy−base | 19 | 217.6650 | 216.9188 | 513.0915 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
 | math | olympiad | moa_critic−base | 19 | 217.7577 | 205.1308 | 544.7153 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
 | math | olympiad | moa_neutral−base | 19 | 191.5890 | 214.4157 | 371.3870 | 0499deda2f068008d488551abf96b4b758c6ed6b79cd2ec6a204d1250b140421 |
-| math | olympiad | moa_legacy−base | 19 | 35.4841 | 54.6803 | 165.2406 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
-| math | olympiad | moa_critic−base | 19 | 38.5811 | 31.4532 | 310.8484 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
-| math | olympiad | moa_neutral−base | 19 | 93.1285 | 61.4582 | 379.2817 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_legacy−base | 2 | 194.8004 | 194.8004 | 228.0552 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_critic−base | 2 | 76.7967 | 76.7967 | 153.1856 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
+| math | olympiad | moa_neutral−base | 2 | 184.8398 | 184.8398 | 296.3604 | 11f95734f602e7d1481f9887ca7fc8bed83258e22fd5c443449ac159a4732115 |
 | math | olympiad | moa_legacy−base | 20 | 166.2506 | 169.0503 | 469.2800 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
 | math | olympiad | moa_critic−base | 20 | 133.4186 | 144.7999 | 271.8578 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
 | math | olympiad | moa_neutral−base | 20 | 184.8999 | 195.2858 | 547.4164 | 2a82215ea19fcbded36fa95df35b6e7c5f6ed28b0b5f6c3460b4223f1904a536 |
@@ -503,9 +501,9 @@ Positive values mean the candidate is slower than `base`.
 | data_analysis | tablejoin | moa_legacy−base | 20 | 44.9007 | 47.0427 | 77.3692 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
 | data_analysis | tablejoin | moa_critic−base | 20 | 45.2285 | 45.9387 | 94.3145 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
 | data_analysis | tablejoin | moa_neutral−base | 20 | 28.8532 | 16.5574 | 80.8461 | 539fd06729e1f852302dd51aab15ffa115225362425ef04808cdef88d000d300 |
-| math | olympiad | moa_legacy−base | 19 | 75.3722 | 33.6838 | 297.1393 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
-| math | olympiad | moa_critic−base | 19 | 67.8071 | 35.9699 | 286.7433 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
-| math | olympiad | moa_neutral−base | 19 | 16.1995 | 65.9696 | 180.2316 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_legacy−base | 5 | 162.7114 | 228.8634 | 287.8030 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_critic−base | 5 | 140.4734 | 226.2764 | 249.8940 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
+| math | olympiad | moa_neutral−base | 5 | 79.0968 | 106.0533 | 233.9679 | 6dfb6aade6429e2cca0718a497a442299a57199dfd547813471f4cf30ed6c7c7 |
 | instruction_following | paraphrase | moa_legacy−base | 20 | 14.1824 | 13.4170 | 24.1805 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
 | instruction_following | paraphrase | moa_critic−base | 20 | 19.5670 | 11.0671 | 41.0022 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
 | instruction_following | paraphrase | moa_neutral−base | 20 | 14.4049 | 10.4442 | 44.6999 | 8c22986a688217ccbcb012c0e5b95acf6b0f6464501e0df4a0cf50c3526767d5 |
@@ -540,10 +538,10 @@ Positive values mean the candidate is slower than `base`.
 | math_comp | 1 | moa_legacy | 19 | 144.4934 | 134.8016 | 225.4886 |
 | math_comp | 1 | moa_critic | 19 | 136.0714 | 141.0680 | 193.5941 |
 | math_comp | 1 | moa_neutral | 19 | 160.6004 | 177.2964 | 221.5690 |
-| olympiad | 7 | base | 135 | 116.4691 | 72.8455 | 280.2514 |
-| olympiad | 7 | moa_legacy | 135 | 280.2627 | 283.6443 | 551.2543 |
-| olympiad | 7 | moa_critic | 135 | 271.6124 | 269.4682 | 557.3942 |
-| olympiad | 7 | moa_neutral | 135 | 285.6744 | 290.5955 | 558.5429 |
+| olympiad | 7 | base | 104 | 69.3584 | 59.4727 | 170.9673 |
+| olympiad | 7 | moa_legacy | 104 | 273.2913 | 273.2790 | 550.4014 |
+| olympiad | 7 | moa_critic | 104 | 259.5404 | 260.3828 | 496.0723 |
+| olympiad | 7 | moa_neutral | 104 | 276.3838 | 278.1742 | 544.0194 |
 | paraphrase | 1 | base | 20 | 16.1366 | 16.2493 | 17.7710 |
 | paraphrase | 1 | moa_legacy | 20 | 30.3191 | 28.2156 | 40.6905 |
 | paraphrase | 1 | moa_critic | 20 | 35.7037 | 30.3522 | 55.7109 |
@@ -565,15 +563,44 @@ Positive values mean the candidate is slower than `base`.
 | math_comp | 1 | moa_legacy−base | 19 | 123.1918 | 115.2279 | 202.6151 |
 | math_comp | 1 | moa_critic−base | 19 | 114.7698 | 122.4973 | 171.6105 |
 | math_comp | 1 | moa_neutral−base | 19 | 139.2988 | 157.4265 | 201.1472 |
-| olympiad | 7 | moa_legacy−base | 135 | 163.7936 | 188.6086 | 438.0373 |
-| olympiad | 7 | moa_critic−base | 135 | 155.1433 | 178.3665 | 403.2604 |
-| olympiad | 7 | moa_neutral−base | 135 | 169.2053 | 187.4497 | 478.7912 |
+| olympiad | 7 | moa_legacy−base | 104 | 203.9329 | 220.4158 | 467.1136 |
+| olympiad | 7 | moa_critic−base | 104 | 190.1820 | 195.7149 | 456.6190 |
+| olympiad | 7 | moa_neutral−base | 104 | 207.0255 | 208.5997 | 486.1310 |
 | paraphrase | 1 | moa_legacy−base | 20 | 14.1824 | 13.4170 | 24.1805 |
 | paraphrase | 1 | moa_critic−base | 20 | 19.5670 | 11.0671 | 41.0022 |
 | paraphrase | 1 | moa_neutral−base | 20 | 14.4049 | 10.4442 | 44.6999 |
 | tablejoin | 5 | moa_legacy−base | 100 | 40.9928 | 34.2374 | 111.1174 |
 | tablejoin | 5 | moa_critic−base | 100 | 42.8830 | 42.3558 | 91.7295 |
 | tablejoin | 5 | moa_neutral−base | 100 | 24.5006 | 19.4001 | 76.1783 |
+
+## Mechanism proxies
+
+candidate adoption is normalized substring matching; erroneous/useful adoption uses the objective candidate score and is not claim-level semantic annotation
+
+| Arm | Trace cells | Reference outputs | Candidate present | Candidate scorable | Candidate score mean | Exact adoption | Useful adoption | Erroneous adoption | Structural violations | Underdetermination signals | Wrapper present |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| moa_critic | 298 | 298 | 153 | 153 | 0.5889 | 64 | 54 | 10 | 0 | 34 | 0 |
+| moa_legacy | 298 | 298 | 0 | 0 | Unavailable | 0 | 0 | 0 | 0 | 2 | 0 |
+| moa_neutral | 298 | 298 | 0 | 0 | Unavailable | 0 | 0 | 0 | 0 | 1 | 0 |
+
+## Provider usage and billing completeness
+
+- Evidence source: attempts
+- Complete: False
+- Recorded calls: 1788
+- Cells/attempts without a provider ledger: 306
+- Usage-complete calls: 894
+- Cost-complete calls: 0
+- Calls with provider generation IDs: 0
+
+| Arm | Role | Provider | Model | Status | Calls | Input | Output | Reasoning | Cache read | Cache write | Estimated USD | Actual USD |
+|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| moa_critic | aggregator | openai-codex | gpt-5.6-sol | succeeded | 298 | 0 | 0 | 0 | 0 | 0 | unknown | unknown |
+| moa_critic | reference | openrouter | xiaomi/mimo-v2.5 | succeeded | 298 | 350202 | 3792012 | 3402124 | 342504 | 0 | unknown | unknown |
+| moa_legacy | aggregator | openai-codex | gpt-5.6-sol | succeeded | 298 | 0 | 0 | 0 | 0 | 0 | unknown | unknown |
+| moa_legacy | reference | openrouter | xiaomi/mimo-v2.5 | succeeded | 298 | 289346 | 3956983 | 3468669 | 393310 | 0 | unknown | unknown |
+| moa_neutral | aggregator | openai-codex | gpt-5.6-sol | succeeded | 298 | 0 | 0 | 0 | 0 | 0 | unknown | unknown |
+| moa_neutral | reference | openrouter | xiaomi/mimo-v2.5 | succeeded | 298 | 331734 | 3751224 | 3454404 | 259098 | 0 | unknown | unknown |
 
 ## Trace audit
 
