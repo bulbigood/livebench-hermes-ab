@@ -5,14 +5,15 @@ import math
 import statistics
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from statistics import NormalDist
 from types import MappingProxyType
 
 from .artifacts import ScoringBundle
-from .domain import CellOutcome, ExcludedOutcome, IntegrityError, ValidOutcome
+from .domain import CellOutcome, ExcludedOutcome, ExclusionCode, IntegrityError, ValidOutcome
 from .evidence import billing_summary, mechanism_summary
+from .output_validation import is_terminal_provider_failure, mark_terminal_provider_call_failed
 from .trace_validation import ExpectedTrace, validate_cell_trace
 
 ScoreAdapter = Callable[[Mapping[str, object], str], float]
@@ -79,6 +80,8 @@ class ScoringResult:
     arm_statistics: Mapping[str, ArmStatistics]
     mechanism_statistics: Mapping[str, object]
     billing_summary: Mapping[str, object]
+    scenario_metadata: Mapping[str, Mapping[str, str]]
+    scenario_coverage: Mapping[str, int]
     confidence_level: float = 0.95
     target_margin_of_error: float = 0.05
     contrasts: tuple[tuple[str, str], ...] = ()
@@ -95,9 +98,11 @@ def _evidence_summaries(
     return MappingProxyType(mechanisms), MappingProxyType(billing)
 
 
-def _minimum_common_samples(rows: tuple[ScoreRow, ...], baseline: str) -> int:
+def _minimum_common_samples(
+    rows: tuple[ScoreRow, ...], baseline: str, question_ids: tuple[str, ...]
+) -> int:
     counts = Counter(row.question_id for row in rows if row.arm == baseline)
-    return min(counts.values())
+    return min((counts.get(question_id, 0) for question_id in question_ids), default=0)
 
 
 def _arm_statistics(
@@ -194,7 +199,74 @@ def reconcile_scoring_evidence(
     return common, MappingProxyType(valid)
 
 
+def _reclassify_terminal_provider_failure(outcome: CellOutcome) -> CellOutcome:
+    if not isinstance(outcome, ValidOutcome):
+        return outcome
+    answer = _answer_text(outcome.answer_record)
+    if not is_terminal_provider_failure(answer):
+        return outcome
+    raw_calls = outcome.answer_record.get("provider_calls")
+    provider_calls: list[Mapping[str, object]] = []
+    if isinstance(raw_calls, list):
+        provider_calls = [raw_call for raw_call in raw_calls if isinstance(raw_call, Mapping)]
+    return ExcludedOutcome(
+        outcome.cell,
+        ExclusionCode.MODEL_OR_PROVIDER_FAILURE,
+        "Hermes returned a terminal provider failure",
+        outcome.elapsed_seconds,
+        {"provider_calls": mark_terminal_provider_call_failed(provider_calls)},
+    )
+
+
+def _reclassify_historical_provider_failures(run: FrozenRun) -> FrozenRun:
+    outcomes = tuple(_reclassify_terminal_provider_failure(value) for value in run.outcomes)
+    attempts = tuple(_reclassify_terminal_provider_failure(value) for value in run.attempts)
+    return replace(run, outcomes=outcomes, attempts=attempts)
+
+
+def _exclusions_and_trace_audit(
+    run: FrozenRun,
+) -> tuple[Counter[str], dict[str, int]]:
+    exclusions = Counter(
+        outcome.code.value for outcome in run.outcomes if isinstance(outcome, ExcludedOutcome)
+    )
+    audits = _revalidate_trace_audits(run.outcomes)
+    trace_audit = {
+        "valid_traces": len(audits),
+        "reference_calls": sum(int(item.get("reference_calls", 0)) for item in audits),
+        "reference_input_tokens": sum(
+            int(item.get("reference_input_tokens", 0)) for item in audits
+        ),
+        "reference_output_tokens": sum(
+            int(item.get("reference_output_tokens", 0)) for item in audits
+        ),
+        "invalid_traces": exclusions.get("INVALID_MOA_TRACE", 0),
+    }
+    return exclusions, trace_audit
+
+
+def _scenario_descriptors(
+    run: FrozenRun, rows: tuple[ScoreRow, ...]
+) -> tuple[int, Mapping[str, Mapping[str, str]], Mapping[str, int]]:
+    question_ids = tuple(run.questions)
+    coverage = Counter(row.question_id for row in rows if row.arm == run.baseline_arm)
+    minimum = _minimum_common_samples(rows, run.baseline_arm, question_ids)
+    metadata = MappingProxyType(
+        {
+            question_id: MappingProxyType(
+                {"category": question.category, "family": question.task}
+            )
+            for question_id, question in run.questions.items()
+        }
+    )
+    retained = MappingProxyType(
+        {question_id: coverage.get(question_id, 0) for question_id in question_ids}
+    )
+    return minimum, metadata, retained
+
+
 def score_run(run: FrozenRun, adapters: Mapping[str, ScoreAdapter]) -> ScoringResult:
+    run = _reclassify_historical_provider_failures(run)
     common, valid = reconcile_scoring_evidence(run)
     rows: list[ScoreRow] = []
     by_arm: dict[str, list[float]] = defaultdict(list)
@@ -230,23 +302,11 @@ def score_run(run: FrozenRun, adapters: Mapping[str, ScoreAdapter]) -> ScoringRe
         for arm in run.arm_order
         if arm != run.baseline_arm
     }
-    exclusions = Counter(
-        outcome.code.value for outcome in run.outcomes if isinstance(outcome, ExcludedOutcome)
-    )
-    audits = _revalidate_trace_audits(run.outcomes)
-    trace_audit = {
-        "valid_traces": len(audits),
-        "reference_calls": sum(int(item.get("reference_calls", 0)) for item in audits),
-        "reference_input_tokens": sum(
-            int(item.get("reference_input_tokens", 0)) for item in audits
-        ),
-        "reference_output_tokens": sum(
-            int(item.get("reference_output_tokens", 0)) for item in audits
-        ),
-        "invalid_traces": exclusions.get("INVALID_MOA_TRACE", 0),
-    }
+    exclusions, trace_audit = _exclusions_and_trace_audit(run)
     row_values = tuple(rows)
-    minimum_common_samples = _minimum_common_samples(row_values, run.baseline_arm)
+    minimum_common_samples, scenario_metadata, scenario_coverage = _scenario_descriptors(
+        run, row_values
+    )
     mechanisms, billing = _evidence_summaries(run, adapters)
     return ScoringResult(
         run.arm_order,
@@ -270,6 +330,8 @@ def score_run(run: FrozenRun, adapters: Mapping[str, ScoreAdapter]) -> ScoringRe
         ),
         mechanisms,
         billing,
+        scenario_metadata,
+        scenario_coverage,
         run.confidence_level,
         run.target_margin_of_error,
         run.contrasts,
@@ -357,40 +419,61 @@ def _distribution(values: list[float]) -> dict[str, object]:
     }
 
 
+def _optional_distribution(values: list[float]) -> dict[str, object]:
+    if values:
+        return _distribution(values)
+    return {
+        "n": 0,
+        "mean": None,
+        "sample_standard_deviation": None,
+        "percentiles": {name: None for name in ("p05", "p25", "p50", "p75", "p95")},
+    }
+
+
 def grouped_statistics(result: ScoringResult) -> dict[str, object]:
     baseline = result.baseline_arm
     scenarios: dict[str, object] = {}
     families: dict[str, object] = {}
-    for question_id in sorted({row.question_id for row in result.rows}):
+    for question_id in sorted(result.scenario_metadata):
         rows = [row for row in result.rows if row.question_id == question_id]
+        metadata = result.scenario_metadata[question_id]
         baseline_by_pair = {row.pair_id: row.score for row in rows if row.arm == baseline}
         scenarios[question_id] = {
-            "category": rows[0].category,
-            "family": rows[0].family,
+            "category": metadata["category"],
+            "family": metadata["family"],
+            "planned_n": result.samples_per_task,
+            "retained_n": result.scenario_coverage[question_id],
             "arms": {
-                arm: _distribution([row.score for row in rows if row.arm == arm])
+                arm: _optional_distribution([row.score for row in rows if row.arm == arm])
                 for arm in result.arm_order
             },
             "paired_deltas_vs_baseline": {
-                arm: _distribution([
+                arm: _optional_distribution([
                     row.score - baseline_by_pair[row.pair_id]
                     for row in rows if row.arm == arm
                 ])
                 for arm in result.arm_order if arm != baseline
             },
         }
-    for family in sorted({row.family for row in result.rows}):
+    for family in sorted({item["family"] for item in result.scenario_metadata.values()}):
         rows = [row for row in result.rows if row.family == family]
+        family_questions = {
+            question_id
+            for question_id, metadata in result.scenario_metadata.items()
+            if metadata["family"] == family
+        }
         baseline_by_pair = {row.pair_id: row.score for row in rows if row.arm == baseline}
         families[family] = {
-            "categories": sorted({row.category for row in rows}),
-            "scenario_count": len({row.question_id for row in rows}),
+            "categories": sorted(
+                {result.scenario_metadata[question_id]["category"] for question_id in family_questions}
+            ),
+            "scenario_count": len(family_questions),
             "arms": {
-                arm: _distribution([row.score for row in rows if row.arm == arm])
+                arm: _optional_distribution([row.score for row in rows if row.arm == arm])
                 for arm in result.arm_order
             },
             "paired_deltas_vs_baseline": {
-                arm: _distribution([
+                arm: _optional_distribution([
                     row.score - baseline_by_pair[row.pair_id]
                     for row in rows if row.arm == arm
                 ])
@@ -545,6 +628,29 @@ def planned_contrast_analysis(result: ScoringResult) -> dict[str, object]:
     return _paired_analysis(result, result.contrasts)
 
 
+def missing_data_sensitivity(result: ScoringResult) -> dict[str, object]:
+    analysis = planned_contrast_analysis(result)
+    comparisons = analysis["comparisons"]
+    assert isinstance(comparisons, dict)
+    bounds: dict[str, object] = {}
+    for key, value in comparisons.items():
+        assert isinstance(value, dict)
+        observed = int(value["observations"])
+        missing = result.planned_pairs - observed
+        observed_sum = float(value["observed_mean_delta"]) * observed
+        bounds[key] = {
+            "observed_pairs": observed,
+            "missing_pairs": missing,
+            "lower_mean_delta": (observed_sum - missing) / result.planned_pairs,
+            "upper_mean_delta": (observed_sum + missing) / result.planned_pairs,
+        }
+    return {
+        "method": "worst_case_bounds_for_missing_pairs",
+        "assumption": "each arm score is bounded to [0, 1]",
+        "comparisons": bounds,
+    }
+
+
 def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
     statistics_value = {
         arm: {
@@ -582,6 +688,7 @@ def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
         "billing_summary": dict(result.billing_summary),
         "samples_per_task": result.samples_per_task,
         "minimum_common_samples_per_task": result.minimum_common_samples_per_task,
+        "scenario_coverage": dict(result.scenario_coverage),
         "statistical_analysis": {
             "confidence_level": result.confidence_level,
             "target_margin_of_error": result.target_margin_of_error,
@@ -593,6 +700,7 @@ def scoring_bundle(result: ScoringResult, report: str) -> ScoringBundle:
         "timing_statistics": timing_statistics(result),
         "paired_decision_analysis": paired_decision_analysis(result),
         "planned_contrast_analysis": planned_contrast_analysis(result),
+        "missing_data_sensitivity": missing_data_sensitivity(result),
     }
     scores = [
         {"pair_id": row.pair_id, "question_id": row.question_id, "category": row.category,

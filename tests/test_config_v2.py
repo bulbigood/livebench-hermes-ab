@@ -119,6 +119,19 @@ def test_unknown_nested_arm_key_fails_closed() -> None:
         parse_config(value)
 
 
+def test_plain_arm_accepts_non_empty_system_prompt_overlay() -> None:
+    import yaml
+
+    value = yaml.safe_load(Path("config.yaml").read_text())
+    value["arms"]["base"]["hermes"]["agent"]["system_prompt"] = "Review before answering."
+    parsed = parse_config(value)
+    assert parsed.arms[0].hermes["agent"]["system_prompt"] == "Review before answering."
+
+    value["arms"]["base"]["hermes"]["agent"]["system_prompt"] = "   "
+    with pytest.raises(ConfigError, match="system_prompt"):
+        parse_config(value)
+
+
 def test_moa_advisory_prompt_selector_is_strict() -> None:
     import yaml
 

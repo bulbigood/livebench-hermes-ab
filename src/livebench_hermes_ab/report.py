@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import statistics
+from collections.abc import Mapping
 
 import yaml
 
 from .scoring import (
     ScoringResult,
     grouped_statistics,
+    missing_data_sensitivity,
     paired_decision_analysis,
     planned_contrast_analysis,
     timing_statistics,
@@ -173,6 +175,29 @@ def _planned_contrasts(result: ScoringResult) -> list[str]:
     return lines
 
 
+def _missing_data_sensitivity(result: ScoringResult) -> list[str]:
+    analysis = missing_data_sensitivity(result)
+    comparisons = analysis["comparisons"]
+    assert isinstance(comparisons, dict)
+    lines = [
+        "",
+        "## Missing-data sensitivity",
+        "",
+        "The score and confidence-interval tables above are complete-case estimates conditional on every arm returning a valid output. Missingness is not assumed random. The bounds below assign every missing paired delta its worst possible value under the stated `[0, 1]` score range.",
+        "",
+        "| Contrast | Observed pairs | Missing pairs | Worst-case mean-delta bounds |",
+        "|---|---:|---:|---:|",
+    ]
+    for key, value in comparisons.items():
+        assert isinstance(value, dict)
+        lines.append(
+            f"| {key} | {value['observed_pairs']} | {value['missing_pairs']} | "
+            f"[{float(value['lower_mean_delta']):.4f}, "
+            f"{float(value['upper_mean_delta']):.4f}] |"
+        )
+    return lines
+
+
 def _mechanism_statistics(result: ScoringResult) -> list[str]:
     summary = result.mechanism_statistics
     by_arm = summary.get("by_arm")
@@ -226,13 +251,16 @@ def _billing_summary(result: ScoringResult) -> list[str]:
     ]
     for value in groups:
         assert isinstance(value, dict)
+        estimated = value.get("estimated_cost_usd")
+        actual = value.get("actual_cost_usd")
+        estimated_text = "unknown" if estimated is None else f"{float(estimated):.10f}"
+        actual_text = "unknown" if actual is None else f"{float(actual):.10f}"
         lines.append(
             f"| {value['arm']} | {value['role']} | {value['provider']} | {value['model']} | "
             f"{value['status']} | {value['calls']} | {value['input_tokens']} | "
             f"{value['output_tokens']} | {value['reasoning_tokens']} | "
             f"{value['cache_read_tokens']} | {value['cache_write_tokens']} | "
-            f"{float(value['estimated_cost_usd']):.10f} | "
-            f"{float(value['actual_cost_usd']):.10f} |"
+            f"{estimated_text} | {actual_text} |"
         )
     return lines
 
@@ -250,7 +278,9 @@ def _trace_audit(result: ScoringResult) -> list[str]:
     ]
 
 
-def _distribution_cells(value: dict[str, object]) -> str:
+def _distribution_cells(value: Mapping[str, object]) -> str:
+    if int(value["n"]) == 0:
+        return "0 | — | — | —"
     percentiles = value["percentiles"]
     assert isinstance(percentiles, dict)
     return " | ".join(
@@ -473,6 +503,7 @@ def render_markdown_report(
     lines.extend(_statistical_analysis(result))
     lines.extend(_paired_decision_analysis(result))
     lines.extend(_planned_contrasts(result))
+    lines.extend(_missing_data_sensitivity(result))
     lines.extend(_grouped_statistics(result))
     lines.extend(_timing_statistics(result))
     lines.extend(_mechanism_statistics(result))

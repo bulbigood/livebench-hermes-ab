@@ -106,4 +106,5 @@ See [configuration](docs/configuration.md), [technical reference](docs/technical
 
 ## Evaluation results
 
-- [Latest evaluation: MoA critic/wrapper paid pilot, 15×20, 2026-08-14](docs/evals/results/2026-08-14-moa-prompt-pilot-15x20.md)
+- [Latest evaluation: self-review mechanism experiment, 15×20, 2026-08-14](docs/evals/results/2026-08-14-self-review-mechanism-15x20.md)
+- [MoA critic/wrapper paid pilot, 15×20, 2026-08-14](docs/evals/results/2026-08-14-moa-prompt-pilot-15x20.md)

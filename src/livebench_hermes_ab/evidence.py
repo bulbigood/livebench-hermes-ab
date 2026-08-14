@@ -76,6 +76,11 @@ def _number(value: object) -> int | float | None:
     return value
 
 
+def _sum_known(values: Sequence[object]) -> float | None:
+    known = [number for value in values if (number := _number(value)) is not None]
+    return float(sum(known)) if known else None
+
+
 def _call_value(value: Mapping[str, object], role: str) -> dict[str, object]:
     usage = _mapping(value.get("usage")) or {}
     input_tokens = _number(usage.get("input_tokens"))
@@ -162,8 +167,10 @@ def billing_summary(
         }
         for field in token_fields:
             row[field] = sum(int(call.get(field) or 0) for call in calls)
-        row["estimated_cost_usd"] = sum(float(call.get("estimated_cost_usd") or 0) for call in calls)
-        row["actual_cost_usd"] = sum(float(call.get("actual_cost_usd") or 0) for call in calls)
+        estimated_values = [call.get("estimated_cost_usd") for call in calls]
+        actual_values = [call.get("actual_cost_usd") for call in calls]
+        row["estimated_cost_usd"] = _sum_known(estimated_values)
+        row["actual_cost_usd"] = _sum_known(actual_values)
         rows.append(row)
     result: dict[str, object] = {
         "source": source,
@@ -177,10 +184,10 @@ def billing_summary(
     }
     for field in token_fields:
         result[field] = sum(int(call.get(field) or 0) for call in all_calls)
-    result["estimated_cost_usd"] = sum(
-        float(call.get("estimated_cost_usd") or 0) for call in all_calls
-    )
-    result["actual_cost_usd"] = sum(float(call.get("actual_cost_usd") or 0) for call in all_calls)
+    estimated_values = [call.get("estimated_cost_usd") for call in all_calls]
+    actual_values = [call.get("actual_cost_usd") for call in all_calls]
+    result["estimated_cost_usd"] = _sum_known(estimated_values)
+    result["actual_cost_usd"] = _sum_known(actual_values)
     result["complete"] = (
         cells_without_ledger == 0
         and result["usage_complete_calls"] == len(all_calls)

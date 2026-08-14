@@ -39,7 +39,66 @@ def test_common_cohort_intersects_every_arm_and_report_preserves_order() -> None
     assert summary["statistical_analysis"]["sufficient_pilot_samples"] is False
     assert summary["statistical_analysis"]["arms"]["base"]["sample_variance"] is None
     assert "WARNING: fewer than 5 common-valid samples per task" in report
-    assert "| 1 | 1 | Unavailable |" in report
+    assert "| 1 | 0 | Unavailable |" in report
+
+
+def test_historical_zero_exit_provider_failure_is_reclassified_before_scoring() -> None:
+    arms = ("base", "candidate")
+    outcomes = (
+        ValidOutcome(
+            CellId("base", "p1", "q", 1),
+            {"answer": "API call failed after 3 retries: [Errno 32] Broken pipe"},
+            1.0,
+        ),
+        ValidOutcome(CellId("candidate", "p1", "q", 1), {"answer": "1"}, 1.0),
+        ValidOutcome(CellId("base", "p2", "q", 2), {"answer": "1"}, 1.0),
+        ValidOutcome(CellId("candidate", "p2", "q", 2), {"answer": "1"}, 1.0),
+    )
+    run = FrozenRun(
+        arms,
+        "base",
+        ("p1", "p2"),
+        outcomes,
+        {"q": QuestionEvidence("cat", "task", {})},
+        samples_per_task=2,
+    )
+
+    result = score_run(run, {"task": lambda _q, answer: float(answer)})
+
+    assert result.common_pairs == ("p2",)
+    assert result.exclusion_counts == {"MODEL_OR_PROVIDER_FAILURE": 1}
+    assert result.arm_means == {"base": 1.0, "candidate": 1.0}
+
+
+def test_missing_frozen_scenario_reports_zero_common_coverage() -> None:
+    q1 = QuestionEvidence("cat", "task", {"question_id": "q1"})
+    q2 = QuestionEvidence("cat", "task", {"question_id": "q2"})
+    outcomes = (
+        ValidOutcome(CellId("base", "q1", "q1", 0), {"answer": "ok"}, 1.0),
+        ValidOutcome(CellId("candidate", "q1", "q1", 0), {"answer": "ok"}, 1.0),
+        ExcludedOutcome(
+            CellId("base", "q2", "q2", 0), ExclusionCode.MODEL_OR_PROVIDER_FAILURE, "failed", 1.0
+        ),
+        ExcludedOutcome(
+            CellId("candidate", "q2", "q2", 0),
+            ExclusionCode.MODEL_OR_PROVIDER_FAILURE,
+            "failed",
+            1.0,
+        ),
+    )
+    run = FrozenRun(
+        ("base", "candidate"),
+        "base",
+        ("q1", "q2"),
+        outcomes,
+        {"q1": q1, "q2": q2},
+    )
+    result = score_run(run, {"task": lambda _question, _answer: 1.0})
+    report = render_markdown_report(result)
+
+    assert result.minimum_common_samples_per_task == 0
+    assert result.scenario_coverage == {"q1": 1, "q2": 0}
+    assert "| cat | task | base | 0 | — | — | — | q2 |" in report
 
 
 def test_report_pairs_mean_with_median_and_embeds_frozen_config_provenance() -> None:

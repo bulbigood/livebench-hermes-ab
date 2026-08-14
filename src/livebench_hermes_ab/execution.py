@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from .artifacts import ArtifactStore, ExecutionBundle
@@ -16,7 +16,8 @@ from .domain import (
     HarnessExecutionError,
     ValidOutcome,
 )
-from .hermes import HermesRequest, HermesRunner
+from .hermes import HermesRequest, HermesResult, HermesRunner
+from .output_validation import is_terminal_provider_failure, mark_terminal_provider_call_failed
 from .scheduler import ScheduledCell, Scheduler
 from .trace_validation import ExpectedTrace, validate_cell_trace
 
@@ -114,6 +115,7 @@ class CellRunner:
                 )
                 outcome, usage = self._check_result(cell, workspace, result)
                 if outcome is not None:
+                    outcome = _merge_prior_provider_calls(outcome, provider_calls)
                     diagnostic = (
                         _trace_diagnostic(result.trace_bytes)
                         if outcome.code is ExclusionCode.INVALID_MOA_TRACE
@@ -171,14 +173,9 @@ class CellRunner:
                 {"provider_calls": _missing_provider_calls(workspace, "failed")},
             ), None
         answer = result.stdout.strip()
-        if not answer or answer.casefold() == "(empty response)":
-            return ExcludedOutcome(
-                cell.id,
-                ExclusionCode.INVALID_MODEL_OUTPUT,
-                "empty model output",
-                result.elapsed_seconds,
-                {"provider_calls": missing_calls},
-            ), None
+        answer_exclusion = _terminal_answer_exclusion(cell, workspace, result, answer)
+        if answer_exclusion is not None:
+            return answer_exclusion, None
         expected = getattr(workspace, "expected_trace", None)
         if expected is not None:
             if result.trace_bytes is None or not isinstance(expected, ExpectedTrace):
@@ -229,6 +226,18 @@ class CellRunner:
         return None, {"provider_calls": _missing_provider_calls(workspace, "succeeded")}
 
 
+def _merge_prior_provider_calls(
+    outcome: ExcludedOutcome, prior_calls: list[dict[str, object]]
+) -> ExcludedOutcome:
+    if not prior_calls:
+        return outcome
+    evidence = dict(outcome.evidence or {})
+    current = evidence.get("provider_calls")
+    current_calls = current if isinstance(current, list) else []
+    evidence["provider_calls"] = [*prior_calls, *current_calls]
+    return replace(outcome, evidence=evidence)
+
+
 def _missing_provider_calls(workspace: object, status: str) -> list[dict[str, object]]:
     identities = getattr(workspace, "expected_provider_identities", ())
     return [
@@ -252,6 +261,29 @@ def _missing_provider_calls(workspace: object, status: str) -> list[dict[str, ob
         }
         for role, provider, model in identities
     ]
+
+
+def _terminal_answer_exclusion(
+    cell: CellSpec, workspace: object, result: HermesResult, answer: str
+) -> ExcludedOutcome | None:
+    if not answer or answer.casefold() == "(empty response)":
+        return ExcludedOutcome(
+            cell.id,
+            ExclusionCode.INVALID_MODEL_OUTPUT,
+            "empty model output",
+            result.elapsed_seconds,
+            {"provider_calls": _missing_provider_calls(workspace, "unknown")},
+        )
+    if is_terminal_provider_failure(answer):
+        expected_calls = _missing_provider_calls(workspace, "unknown")
+        return ExcludedOutcome(
+            cell.id,
+            ExclusionCode.MODEL_OR_PROVIDER_FAILURE,
+            "Hermes returned a terminal provider failure",
+            result.elapsed_seconds,
+            {"provider_calls": mark_terminal_provider_call_failed(expected_calls)},
+        )
+    return None
 
 
 @dataclass(frozen=True, slots=True)

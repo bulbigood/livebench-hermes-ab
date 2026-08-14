@@ -26,6 +26,7 @@ class FakeRunner:
 class FakeWorkspace:
     def __init__(self, home: Path):
         self.home = home
+        self.expected_provider_identities: tuple[tuple[str, str, str], ...] = ()
 
     def cleanup(self) -> None:
         pass
@@ -43,6 +44,91 @@ def test_cell_runner_and_execution_service_publish_only_on_complete(tmp_path: Pa
     store2 = FilesystemArtifactStore(tmp_path / "fatal")
     result2 = ExecutionService(Scheduler(1), runner, store2).execute((fatal,))
     assert not result2.complete and store2.current_generation("execution") is None
+
+
+def test_zero_exit_provider_failure_text_is_excluded(tmp_path: Path) -> None:
+    cell = CellSpec(CellId("base", "p", "q", 1), "prompt", "base", 1)
+
+    class FailedProviderRunner:
+        def invoke(self, request: HermesRequest) -> HermesResult:
+            return HermesResult(
+                0,
+                "API call failed after 3 retries: [Errno 32] Broken pipe",
+                "",
+                1.0,
+                None,
+            )
+
+    result = CellRunner(
+        FailedProviderRunner(), lambda _cell: FakeWorkspace(tmp_path / "workspace")
+    ).run(cell)
+
+    assert isinstance(result.outcome, ExcludedOutcome)
+    assert result.outcome.code is ExclusionCode.MODEL_OR_PROVIDER_FAILURE
+    assert result.outcome.reason == "Hermes returned a terminal provider failure"
+
+
+def test_multiturn_terminal_failure_preserves_prior_provider_calls(tmp_path: Path) -> None:
+    cell = CellSpec(
+        CellId("moa", "p", "q", 1),
+        "prompt",
+        "moa",
+        4,
+        turns=("first", "second"),
+    )
+
+    class SequenceRunner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def invoke(self, request: HermesRequest) -> HermesResult:
+            self.calls += 1
+            if self.calls == 1:
+                return HermesResult(0, "first answer", "", 1.0, None)
+            return HermesResult(
+                0,
+                "API call failed after 3 retries: [Errno 32] Broken pipe",
+                "",
+                1.0,
+                None,
+            )
+
+    workspace = FakeWorkspace(tmp_path / "workspace")
+    workspace.expected_provider_identities = (
+        ("reference", "openrouter", "ref"),
+        ("aggregator", "openai-codex", "acting"),
+    )
+    result = CellRunner(SequenceRunner(), lambda _cell: workspace).run(cell)
+
+    assert isinstance(result.outcome, ExcludedOutcome)
+    assert result.outcome.evidence is not None
+    calls = result.outcome.evidence["provider_calls"]
+    assert isinstance(calls, list)
+    assert [(call["role"], call["status"]) for call in calls] == [
+        ("reference", "succeeded"),
+        ("aggregator", "succeeded"),
+        ("reference", "unknown"),
+        ("aggregator", "failed_output"),
+    ]
+
+
+def test_provider_failure_phrase_inside_normal_answer_is_not_excluded(tmp_path: Path) -> None:
+    cell = CellSpec(CellId("base", "p", "q", 1), "prompt", "base", 1)
+
+    class QuotingRunner:
+        def invoke(self, request: HermesRequest) -> HermesResult:
+            return HermesResult(
+                0,
+                'The phrase "API call failed after 3 retries" is an error message.',
+                "",
+                1.0,
+                None,
+            )
+
+    result = CellRunner(
+        QuotingRunner(), lambda _cell: FakeWorkspace(tmp_path / "workspace")
+    ).run(cell)
+    assert isinstance(result.outcome, ValidOutcome)
 
 
 def test_invalid_moa_trace_is_preserved_in_immutable_attempt_before_cleanup(

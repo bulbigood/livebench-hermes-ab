@@ -50,6 +50,11 @@ def test_billing_summary_groups_calls_and_requires_all_completeness_dimensions()
     assert summary["estimated_cost_usd"] == 0.01
     assert summary["actual_cost_usd"] == 0.02
     assert {row["role"] for row in summary["groups"]} == {"reference", "aggregator"}
+    groups = summary["groups"]
+    assert isinstance(groups, list)
+    by_role = {row["role"]: row for row in groups}
+    assert by_role["reference"]["actual_cost_usd"] is None
+    assert by_role["aggregator"]["estimated_cost_usd"] is None
 
 
 def test_mechanism_summary_scores_candidate_and_reports_proxy_bounds() -> None:

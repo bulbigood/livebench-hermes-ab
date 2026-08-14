@@ -198,11 +198,16 @@ def _parse_arms(value: object) -> tuple[ArmConfig, ...]:
         model = _mapping(hermes["model"], f"arms.{name}.hermes.model")
         _keys(model, {"provider", "default"}, f"arms.{name}.hermes.model")
         agent = _mapping(hermes["agent"], f"arms.{name}.hermes.agent")
-        extra_agent = agent.keys() - {"reasoning_effort", "disabled_toolsets"}
+        extra_agent = agent.keys() - {"reasoning_effort", "disabled_toolsets", "system_prompt"}
         if extra_agent:
             raise ConfigError(
                 f"arms.{name}.hermes.agent contains unsupported keys: {sorted(extra_agent)}"
             )
+        system_prompt = agent.get("system_prompt")
+        if system_prompt is not None and (
+            not isinstance(system_prompt, str) or not system_prompt.strip()
+        ):
+            raise ConfigError(f"arms.{name}.hermes.agent.system_prompt must be non-empty")
         moa = _mapping(hermes["moa"], f"arms.{name}.hermes.moa")
         if not isinstance(moa.get("enabled"), bool):
             raise ConfigError(f"arms.{name}.hermes.moa.enabled must be boolean")
