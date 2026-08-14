@@ -49,12 +49,13 @@ The first three comparisons are the frozen arm-versus-baseline questions. The fi
 
 - The untrusted wrapper repairs most of the degradation seen in legacy MoA, but does not improve quality over a successful plain call on this surviving cohort.
 - The structured critic rubric has no demonstrated incremental value over neutral framing.
+- `moa_neutral` is not a clean semantic placebo: the reference matched its requested constant template exactly in only 98/298 valid traces; most other outputs introduced task-dependent content.
 - Family effects remain heterogeneous: versus base, critic is −0.0331 on olympiad, −0.0139 on tablejoin, +0.2500 on the single CTA scenario, −0.0526 on math competition, and +0.0300 on paraphrase.
 - Neutral is slightly stronger on tablejoin (+0.0075) and weaker on olympiad (−0.0423); these shifts do not create an overall advantage.
 - MoA mean latency is 3.8–3.9× the corrected base mean. There is no quality evidence here that justifies that default latency penalty.
 - The operational reliability asymmetry remains important: base surfaced 32 failures while the MoA paths did not. That is a transport/retry finding, not evidence that MoA reasoning improved answers.
 
-Corrected scoring generation: `ba4b67a5f0c743ab8158bf86af0982eb`.
+Corrected scoring generation: `7729f2e29ab841edaab31cc076d7302e`.
 
 | Arm | Mean | Median |
 |---|---:|---:|
@@ -579,9 +580,9 @@ candidate adoption is normalized substring matching; erroneous/useful adoption u
 
 | Arm | Trace cells | Reference outputs | Candidate present | Candidate scorable | Candidate score mean | Exact adoption | Useful adoption | Erroneous adoption | Structural violations | Underdetermination signals | Wrapper present |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| moa_critic | 298 | 298 | 153 | 153 | 0.5889 | 64 | 54 | 10 | 0 | 34 | 0 |
+| moa_critic | 298 | 298 | 153 | 153 | 0.5889 | 64 | 54 | 10 | 0 | 34 | 298 |
 | moa_legacy | 298 | 298 | 0 | 0 | Unavailable | 0 | 0 | 0 | 0 | 2 | 0 |
-| moa_neutral | 298 | 298 | 0 | 0 | Unavailable | 0 | 0 | 0 | 0 | 1 | 0 |
+| moa_neutral | 298 | 298 | 0 | 0 | Unavailable | 0 | 0 | 0 | 0 | 1 | 298 |
 
 ## Provider usage and billing completeness
 

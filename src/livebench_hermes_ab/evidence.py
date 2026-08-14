@@ -201,6 +201,10 @@ def _normalized(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
+def _aggregator_input_messages(aggregator: Mapping[str, object]) -> object:
+    return aggregator.get("input_messages") or aggregator.get("messages") or []
+
+
 def mechanism_summary(
     outcomes: Sequence[CellOutcome],
     questions: Mapping[str, object],
@@ -236,7 +240,7 @@ def mechanism_summary(
             )
             aggregator = trace.get("aggregator")
             aggregator = aggregator if isinstance(aggregator, Mapping) else {}
-            messages = json.dumps(aggregator.get("messages") or [], ensure_ascii=False)
+            messages = json.dumps(_aggregator_input_messages(aggregator), ensure_ascii=False)
             if "<BEGIN_UNTRUSTED_REFERENCE_BLOCKS>" in messages and "<END_UNTRUSTED_REFERENCE_BLOCKS>" in messages:
                 bucket["untrusted_wrapper_present"] += 1
             for output in outputs:

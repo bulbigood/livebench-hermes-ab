@@ -21,7 +21,7 @@ def _outcome() -> ValidOutcome:
             "provider": "openai",
             "model": "agg",
             "output": "42",
-            "messages": [
+            "input_messages": [
                 {
                     "role": "user",
                     "content": "<BEGIN_UNTRUSTED_REFERENCE_BLOCKS>x<END_UNTRUSTED_REFERENCE_BLOCKS>",
